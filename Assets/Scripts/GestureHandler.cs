@@ -1,0 +1,65 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Serialization;
+
+using Microsoft.MixedReality.Toolkit.Input;
+using Microsoft.MixedReality.Toolkit.Utilities;
+
+public enum Gesture
+{
+    None,
+    Pinch,
+    Grab,
+    OpenPalm
+}
+
+public class GestureHandler : MonoBehaviour
+{
+    private Gesture currentGesture = Gesture.None;
+    private Gesture fixedGesture = Gesture.None;
+
+    private float timeNewGesture = 0.05f;
+    private float gestureStart = 0.0f;
+
+    [SerializeField]
+    private Handedness handedness = Handedness.None;
+
+    void Start()
+    {
+    }
+
+    public Gesture GetGesture()
+    {
+        return fixedGesture;
+    }
+
+    void FixedUpdate()
+    {
+        if (HandJointUtils.FindHand(handedness) is null)
+            return;
+
+        Gesture newGesture = Gesture.None;
+
+        if (GestureUtils.IsPinching(handedness))
+            newGesture = Gesture.Pinch;
+        else if (GestureUtils.IsGrabbing(handedness))
+            newGesture = Gesture.Grab;
+        else if (GestureUtils.IsOpenPalm(handedness))
+            newGesture = Gesture.OpenPalm;
+
+        if (newGesture != currentGesture)
+        {
+            gestureStart = Time.time;
+            currentGesture = newGesture;
+        }
+
+        if (fixedGesture != newGesture)
+        {
+            if (Time.time - gestureStart > timeNewGesture)
+            {
+                fixedGesture = newGesture;
+            }
+        }
+    }
+}
