@@ -1,11 +1,9 @@
-using System.Collections;
+using Microsoft.MixedReality.Toolkit.Utilities;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Serialization;
-using Microsoft;
+using UnityEngine.SceneManagement;
 using Microsoft.MixedReality.Toolkit;
 using Microsoft.MixedReality.Toolkit.Input;
-using Microsoft.MixedReality.Toolkit.Utilities;
 using Microsoft.MixedReality.Toolkit.WindowsMixedReality;
 
 using Handedness = Microsoft.MixedReality.Toolkit.Utilities.Handedness;
@@ -39,7 +37,6 @@ public class InputController : MonoBehaviour
     [Header("Gameobjects")]
     [SerializeField]
     private GameObject Board = null;
-
     [SerializeField]
     private GameObject Line = null;
 
@@ -58,30 +55,8 @@ public class InputController : MonoBehaviour
     void Start()
     {
         Debug.Log("Started");
-        Debug.Log("Line object is: " + Line);
-
         mode = Modes.Board;
         gestureHandler = gestureObject.GetComponent<GestureHandler>();
-
-        if (Line != null)
-        {
-            Line.SetActive(gestureHandler.GetGesture() == Gesture.OpenPalm);
-        }
-    }
-
-    IEnumerator waiter()
-    {
-        yield return new WaitForSeconds(0.05f);
-        int nmb = 50;
-        for (int i = 0; i < nmb; i++)
-        {
-            float x = Random.Range(-0.07f, 0.07f);
-            float y = Random.Range(-0.07f, 0.07f);
-            GameObject dart = (GameObject)Instantiate(DartPrefab, new Vector3(x, y, 0), Quaternion.identity);
-            dart.GetComponent<DartHandler>().SetVelocity(new Vector3(0, 5, 7));
-            if (i != nmb - 1)
-                yield return new WaitForSeconds(0.05f);
-        }
     }
 
     void FixedUpdate()
@@ -118,36 +93,25 @@ public class InputController : MonoBehaviour
             case Gesture.Pinch:
                 generateDart();
                 return Modes.Dart;
-
             default:
                 break;
         }
-
         return mode;
     }
 
     private Modes board_state(Modes mode)
     {
-        Gesture currentGesture = gestureHandler.GetGesture();
-
-        if (Line != null)
+        switch (gestureHandler.GetGesture())
         {
-            if (currentGesture == Gesture.OpenPalm)
-            {
-                Line.SetActive(true);
-            }
-            else
-            {
-                Line.SetActive(false);
-            }
-        }
-
-        if (currentGesture == Gesture.Pinch)
-        {
-            return Modes.Idle;
+            case Gesture.Pinch:
+                return Modes.Idle;
+            default:
+                break;
         }
 
         moveBoard();
+        Line.SetActive(false);
+
         return mode;
     }
 
@@ -157,7 +121,6 @@ public class InputController : MonoBehaviour
         {
             case Gesture.Pinch:
                 break;
-
             default:
                 throwDart();
                 return Modes.Idle;
@@ -165,11 +128,7 @@ public class InputController : MonoBehaviour
 
         trackSpeed();
         moveDart();
-
-        if (Line != null)
-        {
-            Line.SetActive(true);
-        }
+        Line.SetActive(true);
 
         return mode;
     }
@@ -178,6 +137,8 @@ public class InputController : MonoBehaviour
     {
         Dart = (GameObject)Instantiate(DartPrefab, new Vector3(0, 0, 0), Quaternion.identity);
         Dart.GetComponent<DartHandler>().Pause(true);
+
+        track.Clear();
     }
 
     private void trackSpeed()
@@ -200,7 +161,7 @@ public class InputController : MonoBehaviour
             return;
 
         Vector3 dir = Vector3.zero;
-        float magnitude = 0;
+        float magnitude = 0f;
         List<(Vector3, float)> points = new List<(Vector3, float)>(track);
 
         if (points.Count >= 2)
@@ -209,27 +170,70 @@ public class InputController : MonoBehaviour
             {
                 (Vector3, float) cur = points[i];
                 (Vector3, float) next = points[i + 1];
-                Vector3 temp = (cur.Item1 - next.Item1) / (cur.Item2 - next.Item2);
+
+                float deltaTime = cur.Item2 - next.Item2;
+                if (Mathf.Abs(deltaTime) < 0.0001f)
+                    continue;
+
+                Vector3 temp = (cur.Item1 - next.Item1) / deltaTime;
                 dir += temp;
+
                 if (temp.magnitude > magnitude)
                     magnitude = temp.magnitude;
             }
         }
 
+        if (dir.magnitude < 0.0001f || magnitude < 0.0001f)
+        {
+            Debug.Log("Throw cancelled: not enough movement data.");
+            return;
+        }
+
         speed = dir.normalized;
         speed *= magnitude;
-        speed *= 1000f;
+        speed *= 1000f; // convert from units/ms to units/s
         speed *= speedFactor;
         speed *= Constants.GetComponent<ConstantsScript>().DartsSpeed;
 
-        Debug.Log(speed);
+        float releaseAngle = CalculateReleaseAngle(speed);
+        string feedback = GetAngleFeedback(releaseAngle);
+
+        Debug.Log($"[TRAINING] Release speed: {speed}");
+        Debug.Log($"[TRAINING] Release angle: {releaseAngle:F2} degrees");
+        Debug.Log($"[TRAINING] Feedback: {feedback}");
 
         DartHandler dart = Dart.GetComponent<DartHandler>();
+        dart.SetThrowData(speed, releaseAngle, feedback);
         dart.SetVelocity(speed);
         dart.Pause(false);
 
         Dart.transform.parent = null;
         Dart = null;
+    }
+
+    private float CalculateReleaseAngle(Vector3 velocity)
+    {
+        Vector3 horizontalVelocity = new Vector3(velocity.x, 0f, velocity.z);
+
+        if (horizontalVelocity.magnitude < 0.0001f)
+            return 90f;
+
+        float angle = Vector3.Angle(horizontalVelocity, velocity);
+
+        if (velocity.y < 0f)
+            angle *= -1f;
+
+        return angle;
+    }
+
+    private string GetAngleFeedback(float angle)
+    {
+        if (angle < 5f)
+            return "Too flat";
+        else if (angle > 20f)
+            return "Too steep";
+        else
+            return "Good release angle";
     }
 
     private void moveDart()
@@ -272,11 +276,6 @@ public class InputController : MonoBehaviour
         if (!HandJointUtils.TryGetJointPose(TrackedHandJoint.Palm, Handedness.Right, out MixedRealityPose jointPose))
             return;
 
-        if (Board.GetComponent<BoardHandler>().projectTo(jointPose.Position, jointPose.Forward))
-        {
-        }
-        else
-        {
-        }
+        Board.GetComponent<BoardHandler>().projectTo(jointPose.Position, jointPose.Forward);
     }
 }
