@@ -28,6 +28,7 @@ public class DartHandler : MonoBehaviour
     public Vector3 releaseVelocity;
     public float releaseAngle;
     public string releaseFeedback;
+    public float releaseStabilityScore;
 
     void Start()
     {
@@ -57,11 +58,12 @@ public class DartHandler : MonoBehaviour
         trail.enabled = true;
     }
 
-    public void SetThrowData(Vector3 velocity, float angle, string feedback)
+    public void SetThrowData(Vector3 velocity, float angle, string feedback, float stabilityScore)
     {
         releaseVelocity = velocity;
         releaseAngle = angle;
         releaseFeedback = feedback;
+        releaseStabilityScore = stabilityScore;
     }
 
     void Update()

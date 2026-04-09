@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using System.Linq;
 
 public class BoardHandler : MonoBehaviour
 {
@@ -17,6 +18,24 @@ public class BoardHandler : MonoBehaviour
     public float tripleDouble = 0.008f;
 
     public List<int> points = new List<int>();
+    public string LastThrowSummary { get; private set; } = "Throw feedback appears after the first hit.";
+
+    [Header("Mistake Classifier Thresholds")]
+    [SerializeField]
+    private float tooFlatAngle = 7f;
+    [SerializeField]
+    private float tooSteepAngle = 20f;
+    [SerializeField]
+    private float horizontalBiasThreshold = 0.03f;
+    [SerializeField]
+    private float unstableThreshold = 0.45f;
+    [SerializeField]
+    private int adaptiveHintWindow = 8;
+    [SerializeField]
+    private int speedHistoryWindow = 8;
+
+    private List<float> recentHitXs = new List<float>();
+    private List<float> recentReleaseSpeeds = new List<float>();
 
     void Start()
     {
@@ -53,6 +72,35 @@ public class BoardHandler : MonoBehaviour
                 Debug.Log($"[TRAINING] Release angle at hit: {dartHandler.releaseAngle:F2} degrees");
                 Debug.Log($"[TRAINING] Feedback at release: {dartHandler.releaseFeedback}");
                 Debug.Log($"[TRAINING] Release velocity at hit: {dartHandler.releaseVelocity}");
+                Debug.Log($"[TRAINING] Stability score at release: {dartHandler.releaseStabilityScore:F2}");
+
+                string confidence;
+                string tip;
+                string mistake = ClassifyMistake(
+                    dartHandler.releaseAngle,
+                    dartHandler.releaseVelocity.magnitude,
+                    -brd.x,
+                    dartHandler.releaseStabilityScore,
+                    score,
+                    out confidence,
+                    out tip);
+
+                UpdateHistory(-brd.x, dartHandler.releaseVelocity.magnitude);
+                string adaptiveAimHint = GetAdaptiveAimHint();
+
+                LastThrowSummary =
+                    $"LAST THROW\n" +
+                    $"{mistake} ({confidence})\n" +
+                    $"Tip: {tip}\n" +
+                    $"Aim Assist: {adaptiveAimHint}";
+
+                Debug.Log($"[TRAINING] Classifier: {mistake} ({confidence})");
+                Debug.Log($"[TRAINING] Coach tip: {tip}");
+                Debug.Log($"[TRAINING] Adaptive hint: {adaptiveAimHint}");
+            }
+            else
+            {
+                LastThrowSummary = "No throw analytics available for this dart.";
             }
 
             Debug.Log($"[TRAINING] Total throws recorded: {points.Count}");
@@ -187,5 +235,121 @@ public class BoardHandler : MonoBehaviour
     public void ResetPoints()
     {
         points = new List<int>();
+        ResetAnalytics();
+    }
+
+    public void ResetAnalytics()
+    {
+        LastThrowSummary = "Throw feedback appears after the first hit.";
+        recentHitXs.Clear();
+        recentReleaseSpeeds.Clear();
+    }
+
+    private void UpdateHistory(float hitX, float releaseSpeed)
+    {
+        recentHitXs.Add(hitX);
+        if (recentHitXs.Count > adaptiveHintWindow)
+            recentHitXs.RemoveAt(0);
+
+        recentReleaseSpeeds.Add(releaseSpeed);
+        if (recentReleaseSpeeds.Count > speedHistoryWindow)
+            recentReleaseSpeeds.RemoveAt(0);
+    }
+
+    private string ClassifyMistake(
+        float releaseAngle,
+        float releaseSpeed,
+        float hitX,
+        float stabilityScore,
+        int score,
+        out string confidence,
+        out string tip)
+    {
+        if (stabilityScore < unstableThreshold)
+        {
+            float certainty = Mathf.Clamp01((unstableThreshold - stabilityScore) / unstableThreshold);
+            confidence = ConfidenceFromValue(certainty);
+            tip = "Hold pinch 100-150 ms longer before release.";
+            return "Unstable release";
+        }
+
+        if (releaseAngle < tooFlatAngle)
+        {
+            float certainty = Mathf.Clamp01((tooFlatAngle - releaseAngle) / Mathf.Max(tooFlatAngle, 0.001f));
+            confidence = ConfidenceFromValue(certainty);
+            tip = "Lift wrist slightly to increase arc.";
+            return "Too flat";
+        }
+
+        if (releaseAngle > tooSteepAngle)
+        {
+            float certainty = Mathf.Clamp01((releaseAngle - tooSteepAngle) / Mathf.Max(tooSteepAngle, 0.001f));
+            confidence = ConfidenceFromValue(certainty);
+            tip = "Lower release angle by around 3-5 degrees.";
+            return "Too steep";
+        }
+
+        if (hitX < -horizontalBiasThreshold)
+        {
+            float certainty = Mathf.Clamp01(Mathf.Abs(hitX + horizontalBiasThreshold) / 0.08f);
+            confidence = ConfidenceFromValue(certainty);
+            tip = "Aim a little more to the right before release.";
+            return "Left bias";
+        }
+
+        if (hitX > horizontalBiasThreshold)
+        {
+            float certainty = Mathf.Clamp01(Mathf.Abs(hitX - horizontalBiasThreshold) / 0.08f);
+            confidence = ConfidenceFromValue(certainty);
+            tip = "Aim a little more to the left before release.";
+            return "Right bias";
+        }
+
+        if (IsUnderpoweredThrow(releaseSpeed, score))
+        {
+            confidence = "Medium";
+            tip = "Accelerate hand forward a bit more in the last 10 cm.";
+            return "Underpowered throw";
+        }
+
+        confidence = "High";
+        tip = "Good mechanics. Keep the same timing.";
+        return "Good throw";
+    }
+
+    private bool IsUnderpoweredThrow(float releaseSpeed, int score)
+    {
+        if (recentReleaseSpeeds.Count < 3)
+            return false;
+
+        float averageReleaseSpeed = recentReleaseSpeeds.Average();
+        if (averageReleaseSpeed < 0.0001f)
+            return false;
+
+        return score == 0 && releaseSpeed < averageReleaseSpeed * 0.7f;
+    }
+
+    private string GetAdaptiveAimHint()
+    {
+        if (recentHitXs.Count < 4)
+            return "Collecting throw pattern...";
+
+        float meanHitX = recentHitXs.Average();
+
+        if (meanHitX < -0.02f)
+            return "Trend left. Shift aim right by ~2 cm.";
+        if (meanHitX > 0.02f)
+            return "Trend right. Shift aim left by ~2 cm.";
+
+        return "Aim centered. Keep current alignment.";
+    }
+
+    private string ConfidenceFromValue(float value)
+    {
+        if (value > 0.66f)
+            return "High";
+        if (value > 0.33f)
+            return "Medium";
+        return "Low";
     }
 }

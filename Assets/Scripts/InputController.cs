@@ -2,6 +2,7 @@ using Microsoft.MixedReality.Toolkit.Utilities;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using System.Linq;
 using Microsoft.MixedReality.Toolkit;
 using Microsoft.MixedReality.Toolkit.Input;
 using Microsoft.MixedReality.Toolkit.WindowsMixedReality;
@@ -33,6 +34,18 @@ public class InputController : MonoBehaviour
 
     private Vector3 speed = Vector3.zero;
     private Queue<(Vector3, float)> track = new Queue<(Vector3, float)>();
+    private float currentStabilityScore = 0f;
+
+    [Header("Aim Assist")]
+    [SerializeField]
+    private bool enableAimAssist = true;
+    [SerializeField]
+    private GameObject aimAssistMarker = null;
+    [SerializeField]
+    private float aimAssistRayDistance = 6f;
+    [SerializeField]
+    private float stabilityVarianceMax = 0.8f;
+    private Renderer aimAssistRenderer = null;
 
     [Header("Gameobjects")]
     [SerializeField]
@@ -57,6 +70,8 @@ public class InputController : MonoBehaviour
         Debug.Log("Started");
         mode = Modes.Board;
         gestureHandler = gestureObject.GetComponent<GestureHandler>();
+        EnsureAimAssistMarker();
+        SetAimAssistVisible(false);
     }
 
     void FixedUpdate()
@@ -88,6 +103,8 @@ public class InputController : MonoBehaviour
 
     private Modes idle_state(Modes mode)
     {
+        SetAimAssistVisible(false);
+
         switch (gestureHandler.GetGesture())
         {
             case Gesture.Pinch:
@@ -111,6 +128,7 @@ public class InputController : MonoBehaviour
 
         moveBoard();
         Line.SetActive(false);
+        SetAimAssistVisible(false);
 
         return mode;
     }
@@ -128,6 +146,7 @@ public class InputController : MonoBehaviour
 
         trackSpeed();
         moveDart();
+        UpdateAimAssist();
         Line.SetActive(true);
 
         return mode;
@@ -153,6 +172,8 @@ public class InputController : MonoBehaviour
 
         while (track.Count > 0 && track.Peek().Item2 < currentTime - interval)
             track.Dequeue();
+
+        currentStabilityScore = CalculateStabilityScore();
     }
 
     private void throwDart()
@@ -201,14 +222,16 @@ public class InputController : MonoBehaviour
         Debug.Log($"[TRAINING] Release speed: {speed}");
         Debug.Log($"[TRAINING] Release angle: {releaseAngle:F2} degrees");
         Debug.Log($"[TRAINING] Feedback: {feedback}");
+        Debug.Log($"[TRAINING] Stability score: {currentStabilityScore:F2}");
 
         DartHandler dart = Dart.GetComponent<DartHandler>();
-        dart.SetThrowData(speed, releaseAngle, feedback);
+        dart.SetThrowData(speed, releaseAngle, feedback, currentStabilityScore);
         dart.SetVelocity(speed);
         dart.Pause(false);
 
         Dart.transform.parent = null;
         Dart = null;
+        SetAimAssistVisible(false);
     }
 
     private float CalculateReleaseAngle(Vector3 velocity)
@@ -255,6 +278,100 @@ public class InputController : MonoBehaviour
 
         Dart.transform.position = mid_front + dir * 0.07f - palm.Right * 0.015f + palm.Up * 0.015f;
         Dart.transform.forward = dir;
+    }
+
+    private void UpdateAimAssist()
+    {
+        if (!enableAimAssist || Dart == null || aimAssistMarker == null)
+        {
+            SetAimAssistVisible(false);
+            return;
+        }
+
+        int boardLayerMask = (1 << (int)Layers.Board);
+        Vector3 rayOrigin = Dart.transform.position + Dart.transform.forward * 0.02f;
+        Vector3 rayDirection = Dart.transform.forward.normalized;
+
+        RaycastHit hit;
+        if (Physics.Raycast(rayOrigin, rayDirection, out hit, aimAssistRayDistance, boardLayerMask))
+        {
+            aimAssistMarker.transform.position = hit.point + hit.normal * 0.0015f;
+            aimAssistMarker.transform.forward = hit.normal;
+            SetAimAssistVisible(true);
+            UpdateAimAssistColor();
+        }
+        else
+        {
+            SetAimAssistVisible(false);
+        }
+    }
+
+    private void EnsureAimAssistMarker()
+    {
+        if (aimAssistMarker == null)
+        {
+            aimAssistMarker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            aimAssistMarker.name = "AimAssistMarkerRuntime";
+            aimAssistMarker.transform.localScale = Vector3.one * 0.015f;
+            aimAssistMarker.layer = (int)Layers.UI;
+            Collider markerCollider = aimAssistMarker.GetComponent<Collider>();
+            if (markerCollider != null)
+                Destroy(markerCollider);
+        }
+
+        aimAssistRenderer = aimAssistMarker.GetComponent<Renderer>();
+    }
+
+    private void SetAimAssistVisible(bool visible)
+    {
+        if (aimAssistMarker != null && aimAssistMarker.activeSelf != visible)
+            aimAssistMarker.SetActive(visible);
+    }
+
+    private void UpdateAimAssistColor()
+    {
+        if (aimAssistRenderer == null)
+            return;
+
+        Color color = Color.Lerp(Color.red, Color.green, Mathf.Clamp01(currentStabilityScore));
+        aimAssistRenderer.material.color = color;
+    }
+
+    private float CalculateStabilityScore()
+    {
+        List<(Vector3, float)> points = track.ToList();
+        if (points.Count < 3)
+            return 0f;
+
+        List<float> speeds = new List<float>();
+        for (int i = 0; i + 1 < points.Count; i++)
+        {
+            float deltaTimeMs = points[i + 1].Item2 - points[i].Item2;
+            if (Mathf.Abs(deltaTimeMs) < 0.0001f)
+                continue;
+
+            Vector3 deltaPos = points[i + 1].Item1 - points[i].Item1;
+            float speedMetersPerSecond = (deltaPos.magnitude / deltaTimeMs) * 1000f;
+            speeds.Add(speedMetersPerSecond);
+        }
+
+        if (speeds.Count == 0)
+            return 0f;
+
+        float mean = speeds.Average();
+        float meanAbsDeviation = 0f;
+        for (int i = 0; i < speeds.Count; i++)
+        {
+            meanAbsDeviation += Mathf.Abs(speeds[i] - mean);
+        }
+        meanAbsDeviation /= speeds.Count;
+
+        return 1f - Mathf.Clamp01(meanAbsDeviation / Mathf.Max(0.0001f, stabilityVarianceMax));
+    }
+
+    public float GetCurrentStabilityScore()
+    {
+        return currentStabilityScore;
     }
 
     private Vector3 midpoint(Vector3 a, Vector3 b)

@@ -55,13 +55,15 @@ public class UIControllerScript : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        //periodically update the UI scoreboard
-        //ScoreBoard.GetComponent<ButtonConfigHelper>().MainLabelText = $"Score: {Board.GetComponent<BoardHandler>().GetPoints()}"; //old version, where scoreboard was on the menu
-        //Debug.Log(Scoreboard.GetComponent<TextMeshProUGUI>().text);
-
-        int score = Board.GetComponent<BoardHandler>().GetPoints();
+        BoardHandler boardHandler = Board.GetComponent<BoardHandler>();
+        int score = boardHandler.GetPoints();
         int num_darts = GetNumberOfHitDarts();
-        Scoreboard.GetComponent<TextMeshProUGUI>().text = $"\r\nPOINTS: \r\n{score}\r\n\r\nDARTS HIT: \r\n{num_darts}";
+        float stabilityScore = InputController.GetComponent<InputController>().GetCurrentStabilityScore();
+
+        Scoreboard.GetComponent<TextMeshProUGUI>().text =
+            $"\r\nPOINTS: \r\n{score}\r\n\r\nDARTS HIT: \r\n{num_darts}" +
+            $"\r\n\r\nSTABILITY: \r\n{stabilityScore:F2}" +
+            $"\r\n\r\n{boardHandler.LastThrowSummary}";
 
     }
 
@@ -177,10 +179,5 @@ public class UIControllerScript : MonoBehaviour
                 Destroy(child.gameObject);
             }
         }
-
-
     }
-
-
-
 }
