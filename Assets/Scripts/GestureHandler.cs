@@ -18,7 +18,6 @@ public enum Gesture
 
 public class GestureHandler : MonoBehaviour
 {
-
     private Gesture currentGesture = Gesture.None;
     private Gesture fixedGesture = Gesture.None;
 
