@@ -1,7 +1,49 @@
-using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
 using System.Linq;
+using System.Text;
+using UnityEngine;
+
+[System.Serializable]
+public class ThrowRecord
+{
+    public int throwIndex;
+    public int score;
+    public float hitX;
+    public float hitY;
+    public float releaseAngle;
+    public float releaseSpeed;
+    public float stability;
+    public string mistake;
+    public string confidence;
+    public string tip;
+    public string adaptiveHint;
+
+    public ThrowRecord(
+        int throwIndex,
+        int score,
+        float hitX,
+        float hitY,
+        float releaseAngle,
+        float releaseSpeed,
+        float stability,
+        string mistake,
+        string confidence,
+        string tip,
+        string adaptiveHint)
+    {
+        this.throwIndex = throwIndex;
+        this.score = score;
+        this.hitX = hitX;
+        this.hitY = hitY;
+        this.releaseAngle = releaseAngle;
+        this.releaseSpeed = releaseSpeed;
+        this.stability = stability;
+        this.mistake = mistake;
+        this.confidence = confidence;
+        this.tip = tip;
+        this.adaptiveHint = adaptiveHint;
+    }
+}
 
 public class BoardHandler : MonoBehaviour
 {
@@ -16,9 +58,12 @@ public class BoardHandler : MonoBehaviour
     public float bullsInside = 0.0127f;
     public float insideRingRadius = 0.102f;
     public float tripleDouble = 0.008f;
+    private Vector3 baseBoardScale = Vector3.one;
+    private bool hasCachedBoardScale = false;
 
-    public List<int> points = new List<int>();
     public string LastThrowSummary { get; private set; } = "Throw feedback appears after the first hit.";
+    public string LastCoachTip { get; private set; } = "Throw to get a coaching tip.";
+    public string LastAdaptiveAimHint { get; private set; } = "Collecting throw pattern...";
 
     [Header("Mistake Classifier Thresholds")]
     [SerializeField]
@@ -28,87 +73,131 @@ public class BoardHandler : MonoBehaviour
     [SerializeField]
     private float horizontalBiasThreshold = 0.03f;
     [SerializeField]
+    private float verticalBiasThreshold = 0.03f;
+    [SerializeField]
     private float unstableThreshold = 0.45f;
+
+    [Header("Analytics Windows")]
     [SerializeField]
     private int adaptiveHintWindow = 8;
     [SerializeField]
     private int speedHistoryWindow = 8;
+    [SerializeField]
+    private int maxThrowHistory = 30;
 
-    private List<float> recentHitXs = new List<float>();
-    private List<float> recentReleaseSpeeds = new List<float>();
+    private readonly List<int> points = new List<int>();
+    private readonly List<ThrowRecord> throwHistory = new List<ThrowRecord>();
+    private readonly List<float> recentHitXs = new List<float>();
+    private readonly List<float> recentHitYs = new List<float>();
+    private readonly List<float> recentReleaseSpeeds = new List<float>();
 
     void Start()
     {
-        projectTo(new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 0.0f, 1.0f));
-    }
-
-    void Update()
-    {
+        CacheBoardScale();
+        ApplyBoardSize();
+        projectTo(Vector3.zero, Vector3.forward);
     }
 
     public void hit(GameObject obj)
     {
         int layerMaskCombined = (1 << (int)Layers.Board);
-        RaycastHit hit;
+        RaycastHit boardHit;
+
+        if (obj == null)
+        {
+            Debug.LogWarning("BoardHandler.hit called with null dart object.");
+            return;
+        }
 
         Vector3 dir = obj.transform.forward;
         Vector3 from = obj.transform.position - dir * 2.0f;
 
-        if (Physics.Raycast(from, dir, out hit, 10, layerMaskCombined))
+        if (!Physics.Raycast(from, dir, out boardHit, 10f, layerMaskCombined))
         {
-            Vector3 brd = transform.InverseTransformPoint(hit.point);
-            Vector3 scl = transform.localScale;
-            brd = new Vector3(brd.x / scl.x, brd.y / scl.y, brd.z / scl.z);
+            Debug.Log("Ray did not hit board");
+            return;
+        }
 
-            int score = calculatePoints(-brd.x, brd.y);
-            points.Add(score);
+        Vector3 brd = transform.InverseTransformPoint(boardHit.point);
+        Vector3 scl = transform.localScale;
+        brd = new Vector3(
+            brd.x / Mathf.Max(0.0001f, scl.x),
+            brd.y / Mathf.Max(0.0001f, scl.y),
+            brd.z / Mathf.Max(0.0001f, scl.z));
 
-            Debug.Log($"[TRAINING] Board score: {score}");
-            Debug.Log($"[TRAINING] Hit point local: x={-brd.x:F3}, y={brd.y:F3}");
+        float hitX = -brd.x;
+        float hitY = brd.y;
 
-            DartHandler dartHandler = obj.GetComponent<DartHandler>();
-            if (dartHandler != null)
-            {
-                Debug.Log($"[TRAINING] Release angle at hit: {dartHandler.releaseAngle:F2} degrees");
-                Debug.Log($"[TRAINING] Feedback at release: {dartHandler.releaseFeedback}");
-                Debug.Log($"[TRAINING] Release velocity at hit: {dartHandler.releaseVelocity}");
-                Debug.Log($"[TRAINING] Stability score at release: {dartHandler.releaseStabilityScore:F2}");
+        int score = calculatePoints(hitX, hitY);
+        points.Add(score);
 
-                string confidence;
-                string tip;
-                string mistake = ClassifyMistake(
-                    dartHandler.releaseAngle,
-                    dartHandler.releaseVelocity.magnitude,
-                    -brd.x,
-                    dartHandler.releaseStabilityScore,
-                    score,
-                    out confidence,
-                    out tip);
+        string mistake = "No throw analytics";
+        string confidence = "Low";
+        string tip = "Throw data mangler for dette dart.";
 
-                UpdateHistory(-brd.x, dartHandler.releaseVelocity.magnitude);
-                string adaptiveAimHint = GetAdaptiveAimHint();
+        float releaseAngle = 0f;
+        float releaseSpeed = 0f;
+        float stabilityScore = 0f;
 
-                LastThrowSummary =
-                    $"LAST THROW\n" +
-                    $"{mistake} ({confidence})\n" +
-                    $"Tip: {tip}\n" +
-                    $"Aim Assist: {adaptiveAimHint}";
+        DartHandler dartHandler = obj.GetComponent<DartHandler>();
+        if (dartHandler != null)
+        {
+            releaseAngle = dartHandler.releaseAngle;
+            releaseSpeed = dartHandler.releaseVelocity.magnitude;
+            stabilityScore = Mathf.Clamp01(dartHandler.releaseStabilityScore);
 
-                Debug.Log($"[TRAINING] Classifier: {mistake} ({confidence})");
-                Debug.Log($"[TRAINING] Coach tip: {tip}");
-                Debug.Log($"[TRAINING] Adaptive hint: {adaptiveAimHint}");
-            }
-            else
-            {
-                LastThrowSummary = "No throw analytics available for this dart.";
-            }
+            mistake = ClassifyMistake(
+                releaseAngle,
+                releaseSpeed,
+                hitX,
+                hitY,
+                stabilityScore,
+                score,
+                out confidence,
+                out tip);
 
-            Debug.Log($"[TRAINING] Total throws recorded: {points.Count}");
+            UpdateHistory(hitX, hitY, releaseSpeed, true);
         }
         else
         {
-            Debug.Log("Ray did not hit board");
+            UpdateHistory(hitX, hitY, 0f, false);
         }
+
+        LastAdaptiveAimHint = GetAdaptiveAimHint();
+        LastCoachTip = tip;
+        LastThrowSummary =
+            "LAST THROW\n" +
+            $"{mistake} ({confidence})\n" +
+            $"Score: {score} | Stability: {stabilityScore:F2}\n" +
+            $"Tip: {tip}\n" +
+            $"Aim Assist: {LastAdaptiveAimHint}";
+
+        AddThrowRecord(new ThrowRecord(
+            points.Count,
+            score,
+            hitX,
+            hitY,
+            releaseAngle,
+            releaseSpeed,
+            stabilityScore,
+            mistake,
+            confidence,
+            tip,
+            LastAdaptiveAimHint));
+
+        Debug.Log($"[TRAINING] Board score: {score}");
+        Debug.Log($"[TRAINING] Hit point local: x={hitX:F3}, y={hitY:F3}");
+        Debug.Log($"[TRAINING] Classifier: {mistake} ({confidence})");
+        Debug.Log($"[TRAINING] Coach tip: {tip}");
+        Debug.Log($"[TRAINING] Adaptive hint: {LastAdaptiveAimHint}");
+        Debug.Log($"[TRAINING] Total throws recorded: {points.Count}");
+    }
+
+    private void AddThrowRecord(ThrowRecord record)
+    {
+        throwHistory.Add(record);
+        if (throwHistory.Count > maxThrowHistory)
+            throwHistory.RemoveAt(0);
     }
 
     private int calculatePoints(float x, float y)
@@ -121,33 +210,35 @@ public class BoardHandler : MonoBehaviour
         float r = pos.r;
         float phi = pos.phi;
         int[] pointsBoard = new int[] { 6, 13, 4, 18, 1, 20, 5, 12, 9, 14, 11, 8, 16, 7, 19, 3, 17, 2, 15, 10 };
-        int points = pointsBoard[Mathf.FloorToInt(((phi + 9) % 360) / 18)];
+        int sector = Mathf.FloorToInt(((phi + 9f) % 360f) / 18f);
+        sector = Mathf.Clamp(sector, 0, pointsBoard.Length - 1);
+        int score = pointsBoard[sector];
 
-        if (r < bullsInside / 2)
+        if (r < bullsInside / 2f)
         {
-            points = 50;
+            score = 50;
         }
-        else if (bullsInside / 2 < r && r < bullsEyeDiameter / 2)
+        else if (bullsInside / 2f < r && r < bullsEyeDiameter / 2f)
         {
-            points = 25;
+            score = 25;
         }
         else if (insideRingRadius - tripleDouble < r && r < insideRingRadius)
         {
-            points *= 3;
+            score *= 3;
         }
         else if (boardInsideRadius - tripleDouble < r && r < boardInsideRadius)
         {
-            points *= 2;
+            score *= 2;
         }
         else if (boardInsideRadius < r)
         {
-            points = 0;
+            score = 0;
         }
 
-        return points;
+        return score;
     }
 
-    struct PolarCoordinate
+    private struct PolarCoordinate
     {
         public float r;
         public float phi;
@@ -162,30 +253,17 @@ public class BoardHandler : MonoBehaviour
     private PolarCoordinate cartesianToPolar(float x, float y)
     {
         float r = Mathf.Sqrt(x * x + y * y);
-        float phi = 0f;
-
-        if (x == 0)
-        {
-            if (y > 0)
-                phi = 90f;
-            else
-                phi = 270f;
-        }
-        else
-        {
-            phi = Mathf.Rad2Deg * Mathf.Atan(y / x);
-
-            if (x < 0)
-                phi += 180;
-            else if (y < 0)
-                phi += 360;
-        }
+        float phi = Mathf.Rad2Deg * Mathf.Atan2(y, x);
+        if (phi < 0f)
+            phi += 360f;
 
         return new PolarCoordinate(r, phi);
     }
 
     public bool projectTo(Vector3 from, Vector3 dir)
     {
+        ApplyBoardSize();
+
         int layerMaskCombined =
               (1 << (int)Layers.UI)
             | (1 << (int)Layers.Menu)
@@ -198,68 +276,201 @@ public class BoardHandler : MonoBehaviour
         RaycastHit hit;
         if (Physics.Raycast(from, dir, out hit, 10f, layerMaskCombined))
         {
-            Board.transform.position = hit.point;
-            Board.transform.forward = hit.normal.normalized;
-
-            RaycastHit lineHit;
-            Vector3 horizontalBoardNormal = new Vector3(hit.normal.x, 0f, hit.normal.z);
-            horizontalBoardNormal = horizontalBoardNormal.normalized;
-            Vector3 downDir = new Vector3(0f, -1f, 0f);
-
-            if (Physics.Raycast(hit.point + playerDistance * horizontalBoardNormal, downDir, out lineHit, 10f, layerMaskCombined))
+            if (Board != null)
             {
-                Line.transform.position = lineHit.point;
-                Line.transform.forward = horizontalBoardNormal;
+                Board.transform.position = hit.point;
+                Board.transform.forward = hit.normal.normalized;
+            }
+
+            if (Line != null)
+            {
+                RaycastHit lineHit;
+                Vector3 horizontalBoardNormal = new Vector3(hit.normal.x, 0f, hit.normal.z).normalized;
+                Vector3 downDir = Vector3.down;
+
+                if (Physics.Raycast(hit.point + playerDistance * horizontalBoardNormal, downDir, out lineHit, 10f, layerMaskCombined))
+                {
+                    Line.transform.position = lineHit.point;
+                    Line.transform.forward = horizontalBoardNormal;
+                }
             }
 
             return true;
         }
-        else
+
+        if (Board != null)
         {
-            Board.transform.position = dir * 10;
-            Board.transform.forward = -dir;
-            return false;
+            Vector3 safeDirection = dir.sqrMagnitude > 0.0001f ? dir.normalized : Vector3.forward;
+            Board.transform.position = from + safeDirection * 10f;
+            Board.transform.forward = -safeDirection;
         }
+
+        return false;
+    }
+
+    private void CacheBoardScale()
+    {
+        if (hasCachedBoardScale || Board == null)
+            return;
+
+        baseBoardScale = Board.transform.localScale;
+        hasCachedBoardScale = true;
+    }
+
+    private void ApplyBoardSize()
+    {
+        if (Board == null)
+            return;
+
+        CacheBoardScale();
+
+        float safeDiameter = Mathf.Max(0.0001f, boardMaxDiameter);
+        float scaleFactor = Mathf.Max(0.05f, size / safeDiameter);
+        Board.transform.localScale = baseBoardScale * scaleFactor;
+    }
+
+    public void SetBoardSize(float newBoardDiameterMeters)
+    {
+        size = Mathf.Max(0.05f, newBoardDiameterMeters);
+        ApplyBoardSize();
     }
 
     public int GetPoints()
     {
-        int counter = 0;
+        int total = 0;
+        for (int i = 0; i < points.Count; i++)
+            total += points[i];
+        return total;
+    }
+
+    public int GetTotalThrows()
+    {
+        return points.Count;
+    }
+
+    public int GetHitCount()
+    {
+        int hits = 0;
         for (int i = 0; i < points.Count; i++)
         {
-            counter += points[i];
+            if (points[i] > 0)
+                hits++;
         }
-        return counter;
+
+        return hits;
+    }
+
+    public float GetHitRate()
+    {
+        if (points.Count == 0)
+            return 0f;
+
+        return (float)GetHitCount() / points.Count;
+    }
+
+    public float GetAverageScore()
+    {
+        if (points.Count == 0)
+            return 0f;
+
+        return points.Average();
+    }
+
+    public float GetAverageStability()
+    {
+        if (throwHistory.Count == 0)
+            return 0f;
+
+        return throwHistory.Average(item => item.stability);
+    }
+
+    public IReadOnlyList<ThrowRecord> GetThrowHistory()
+    {
+        return throwHistory;
+    }
+
+    public List<ThrowRecord> GetRecentThrows(int maxCount)
+    {
+        int take = Mathf.Min(Mathf.Max(maxCount, 0), throwHistory.Count);
+        List<ThrowRecord> result = new List<ThrowRecord>(take);
+
+        for (int i = throwHistory.Count - 1; i >= throwHistory.Count - take; i--)
+            result.Add(throwHistory[i]);
+
+        return result;
+    }
+
+    public string GetAnalyticsPanelText(int recentThrowCount)
+    {
+        StringBuilder builder = new StringBuilder();
+        builder.Append("THROW ANALYSIS");
+        builder.Append($"\nThrows: {GetTotalThrows()}  Hits: {GetHitCount()} ({GetHitRate() * 100f:F0}%)");
+        builder.Append($"\nAvg Score/Throw: {GetAverageScore():F2}");
+        builder.Append($"\nAvg Stability: {GetAverageStability():F2}");
+        builder.Append($"\nBias Trend: {GetBiasDescription()}");
+        builder.Append($"\nAim Assist Hint: {LastAdaptiveAimHint}");
+
+        if (throwHistory.Count == 0)
+        {
+            builder.Append("\n\nNo throws recorded yet.");
+            builder.Append($"\n\nCoach Tip: {LastCoachTip}");
+            return builder.ToString();
+        }
+
+        builder.Append("\n\nRECENT THROWS");
+        List<ThrowRecord> recentThrows = GetRecentThrows(recentThrowCount);
+        for (int i = 0; i < recentThrows.Count; i++)
+        {
+            ThrowRecord item = recentThrows[i];
+            builder.Append(
+                $"\n#{item.throwIndex}  S:{item.score}  STB:{item.stability:F2}  {item.mistake} ({item.confidence})");
+        }
+
+        builder.Append($"\n\nCoach Tip: {LastCoachTip}");
+        return builder.ToString();
     }
 
     public void ResetPoints()
     {
-        points = new List<int>();
+        points.Clear();
         ResetAnalytics();
     }
 
     public void ResetAnalytics()
     {
         LastThrowSummary = "Throw feedback appears after the first hit.";
+        LastCoachTip = "Throw to get a coaching tip.";
+        LastAdaptiveAimHint = "Collecting throw pattern...";
+
+        throwHistory.Clear();
         recentHitXs.Clear();
+        recentHitYs.Clear();
         recentReleaseSpeeds.Clear();
     }
 
-    private void UpdateHistory(float hitX, float releaseSpeed)
+    private void UpdateHistory(float hitX, float hitY, float releaseSpeed, bool includeReleaseSpeed)
     {
         recentHitXs.Add(hitX);
         if (recentHitXs.Count > adaptiveHintWindow)
             recentHitXs.RemoveAt(0);
 
-        recentReleaseSpeeds.Add(releaseSpeed);
-        if (recentReleaseSpeeds.Count > speedHistoryWindow)
-            recentReleaseSpeeds.RemoveAt(0);
+        recentHitYs.Add(hitY);
+        if (recentHitYs.Count > adaptiveHintWindow)
+            recentHitYs.RemoveAt(0);
+
+        if (includeReleaseSpeed)
+        {
+            recentReleaseSpeeds.Add(releaseSpeed);
+            if (recentReleaseSpeeds.Count > speedHistoryWindow)
+                recentReleaseSpeeds.RemoveAt(0);
+        }
     }
 
     private string ClassifyMistake(
         float releaseAngle,
         float releaseSpeed,
         float hitX,
+        float hitY,
         float stabilityScore,
         int score,
         out string confidence,
@@ -267,7 +478,7 @@ public class BoardHandler : MonoBehaviour
     {
         if (stabilityScore < unstableThreshold)
         {
-            float certainty = Mathf.Clamp01((unstableThreshold - stabilityScore) / unstableThreshold);
+            float certainty = Mathf.Clamp01((unstableThreshold - stabilityScore) / Mathf.Max(0.0001f, unstableThreshold));
             confidence = ConfidenceFromValue(certainty);
             tip = "Hold pinch 100-150 ms longer before release.";
             return "Unstable release";
@@ -287,6 +498,22 @@ public class BoardHandler : MonoBehaviour
             confidence = ConfidenceFromValue(certainty);
             tip = "Lower release angle by around 3-5 degrees.";
             return "Too steep";
+        }
+
+        if (hitY < -verticalBiasThreshold)
+        {
+            float certainty = Mathf.Clamp01(Mathf.Abs(hitY + verticalBiasThreshold) / 0.08f);
+            confidence = ConfidenceFromValue(certainty);
+            tip = "Raise release line slightly and follow through higher.";
+            return "Low release line";
+        }
+
+        if (hitY > verticalBiasThreshold)
+        {
+            float certainty = Mathf.Clamp01(Mathf.Abs(hitY - verticalBiasThreshold) / 0.08f);
+            confidence = ConfidenceFromValue(certainty);
+            tip = "Lower release line slightly and keep wrist neutral.";
+            return "High release line";
         }
 
         if (hitX < -horizontalBiasThreshold)
@@ -312,6 +539,13 @@ public class BoardHandler : MonoBehaviour
             return "Underpowered throw";
         }
 
+        if (score == 0)
+        {
+            confidence = "Low";
+            tip = "Keep elbow stable and align dart to center before release.";
+            return "Off target";
+        }
+
         confidence = "High";
         tip = "Good mechanics. Keep the same timing.";
         return "Good throw";
@@ -331,17 +565,54 @@ public class BoardHandler : MonoBehaviour
 
     private string GetAdaptiveAimHint()
     {
-        if (recentHitXs.Count < 4)
+        if (recentHitXs.Count < 4 || recentHitYs.Count < 4)
             return "Collecting throw pattern...";
 
         float meanHitX = recentHitXs.Average();
+        float meanHitY = recentHitYs.Average();
+
+        List<string> adjustments = new List<string>();
 
         if (meanHitX < -0.02f)
-            return "Trend left. Shift aim right by ~2 cm.";
-        if (meanHitX > 0.02f)
-            return "Trend right. Shift aim left by ~2 cm.";
+            adjustments.Add("right");
+        else if (meanHitX > 0.02f)
+            adjustments.Add("left");
 
-        return "Aim centered. Keep current alignment.";
+        if (meanHitY < -0.02f)
+            adjustments.Add("up");
+        else if (meanHitY > 0.02f)
+            adjustments.Add("down");
+
+        if (adjustments.Count == 0)
+            return "Aim centered. Keep current alignment.";
+
+        if (adjustments.Count == 1)
+            return $"Trend detected. Shift aim slightly {adjustments[0]}.";
+
+        return $"Trend detected. Shift aim {adjustments[0]} and {adjustments[1]}.";
+    }
+
+    private string GetBiasDescription()
+    {
+        if (recentHitXs.Count < 4 || recentHitYs.Count < 4)
+            return "Collecting pattern...";
+
+        float meanHitX = recentHitXs.Average();
+        float meanHitY = recentHitYs.Average();
+
+        string horizontal = "Centered";
+        if (meanHitX < -0.02f)
+            horizontal = "Left";
+        else if (meanHitX > 0.02f)
+            horizontal = "Right";
+
+        string vertical = "Center";
+        if (meanHitY < -0.02f)
+            vertical = "Low";
+        else if (meanHitY > 0.02f)
+            vertical = "High";
+
+        return $"{horizontal}/{vertical}";
     }
 
     private string ConfidenceFromValue(float value)

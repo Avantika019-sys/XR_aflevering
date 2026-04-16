@@ -1,11 +1,8 @@
+using Microsoft.MixedReality.Toolkit.Input;
 using Microsoft.MixedReality.Toolkit.Utilities;
 using System.Collections.Generic;
-using UnityEngine;
-using UnityEngine.SceneManagement;
 using System.Linq;
-using Microsoft.MixedReality.Toolkit;
-using Microsoft.MixedReality.Toolkit.Input;
-using Microsoft.MixedReality.Toolkit.WindowsMixedReality;
+using UnityEngine;
 
 using Handedness = Microsoft.MixedReality.Toolkit.Utilities.Handedness;
 
@@ -27,13 +24,19 @@ public class InputController : MonoBehaviour
     [SerializeField]
     public Modes mode = Modes.Idle;
 
-    private Handedness trackedHand = Handedness.Right;
-
     [SerializeField]
     private float speedFactor = 3.0f;
 
+    [SerializeField]
+    private int minimumTrackSamples = 3;
+
+    [SerializeField]
+    private float minimumThrowVelocity = 0.05f;
+
+    private Handedness trackedHand = Handedness.Right;
+
     private Vector3 speed = Vector3.zero;
-    private Queue<(Vector3, float)> track = new Queue<(Vector3, float)>();
+    private readonly Queue<(Vector3, float)> track = new Queue<(Vector3, float)>();
     private float currentStabilityScore = 0f;
 
     [Header("Aim Assist")]
@@ -45,7 +48,9 @@ public class InputController : MonoBehaviour
     private float aimAssistRayDistance = 6f;
     [SerializeField]
     private float stabilityVarianceMax = 0.8f;
+
     private Renderer aimAssistRenderer = null;
+    private bool createdAimAssistMarkerRuntime = false;
 
     [Header("Gameobjects")]
     [SerializeField]
@@ -67,29 +72,50 @@ public class InputController : MonoBehaviour
 
     void Start()
     {
-        Debug.Log("Started");
         mode = Modes.Board;
-        gestureHandler = gestureObject.GetComponent<GestureHandler>();
+
+        if (gestureObject != null)
+            gestureHandler = gestureObject.GetComponent<GestureHandler>();
+
         EnsureAimAssistMarker();
         SetAimAssistVisible(false);
     }
 
+    void OnEnable()
+    {
+        if (aimAssistMarker == null)
+            EnsureAimAssistMarker();
+
+        SetAimAssistVisible(false);
+    }
+
+    void OnDisable()
+    {
+        SetAimAssistVisible(false);
+
+        if (createdAimAssistMarkerRuntime && aimAssistMarker != null)
+        {
+            Destroy(aimAssistMarker);
+            aimAssistMarker = null;
+        }
+    }
+
     void FixedUpdate()
     {
+        if (gestureHandler == null)
+            return;
+
         switch (mode)
         {
             case Modes.Idle:
                 mode = idle_state(mode);
                 break;
-
             case Modes.Board:
                 mode = board_state(mode);
                 break;
-
             case Modes.Dart:
                 mode = dart_state(mode);
                 break;
-
             default:
                 Debug.Log($"Mode undefined: {mode}");
                 break;
@@ -111,9 +137,8 @@ public class InputController : MonoBehaviour
                 generateDart();
                 return Modes.Dart;
             default:
-                break;
+                return mode;
         }
-        return mode;
     }
 
     private Modes board_state(Modes mode)
@@ -127,9 +152,10 @@ public class InputController : MonoBehaviour
         }
 
         moveBoard();
-        Line.SetActive(false);
-        SetAimAssistVisible(false);
+        if (Line != null)
+            Line.SetActive(false);
 
+        SetAimAssistVisible(false);
         return mode;
     }
 
@@ -147,28 +173,38 @@ public class InputController : MonoBehaviour
         trackSpeed();
         moveDart();
         UpdateAimAssist();
-        Line.SetActive(true);
+
+        if (Line != null)
+            Line.SetActive(true);
 
         return mode;
     }
 
     private void generateDart()
     {
-        Dart = (GameObject)Instantiate(DartPrefab, new Vector3(0, 0, 0), Quaternion.identity);
+        if (Dart != null)
+            Destroy(Dart);
+
+        if (DartPrefab == null)
+        {
+            Debug.LogError("DartPrefab is not assigned on InputController.");
+            return;
+        }
+
+        Dart = Instantiate(DartPrefab, Vector3.zero, Quaternion.identity);
         Dart.GetComponent<DartHandler>().Pause(true);
 
         track.Clear();
+        currentStabilityScore = 0f;
     }
 
     private void trackSpeed()
     {
+        if (!HandJointUtils.TryGetJointPose(TrackedHandJoint.Palm, trackedHand, out MixedRealityPose palm))
+            return;
+
         float currentTime = Time.time * 1000f;
-
-        Vector3 pos = Vector3.zero;
-        if (HandJointUtils.TryGetJointPose(TrackedHandJoint.Palm, trackedHand, out MixedRealityPose palm))
-            pos = palm.Position;
-
-        track.Enqueue((pos, currentTime));
+        track.Enqueue((palm.Position, currentTime));
 
         while (track.Count > 0 && track.Peek().Item2 < currentTime - interval)
             track.Dequeue();
@@ -181,40 +217,51 @@ public class InputController : MonoBehaviour
         if (Dart == null)
             return;
 
-        Vector3 dir = Vector3.zero;
-        float magnitude = 0f;
-        List<(Vector3, float)> points = new List<(Vector3, float)>(track);
-
-        if (points.Count >= 2)
+        if (track.Count < minimumTrackSamples)
         {
-            for (int i = 0; (i + 1) < points.Count; i++)
-            {
-                (Vector3, float) cur = points[i];
-                (Vector3, float) next = points[i + 1];
-
-                float deltaTime = cur.Item2 - next.Item2;
-                if (Mathf.Abs(deltaTime) < 0.0001f)
-                    continue;
-
-                Vector3 temp = (cur.Item1 - next.Item1) / deltaTime;
-                dir += temp;
-
-                if (temp.magnitude > magnitude)
-                    magnitude = temp.magnitude;
-            }
+            CancelPendingThrow("Throw cancelled: not enough movement samples.");
+            return;
         }
 
-        if (dir.magnitude < 0.0001f || magnitude < 0.0001f)
+        Vector3 dir = Vector3.zero;
+        float magnitude = 0f;
+        List<(Vector3, float)> points = track.ToList();
+
+        for (int i = 0; (i + 1) < points.Count; i++)
         {
-            Debug.Log("Throw cancelled: not enough movement data.");
+            (Vector3, float) current = points[i];
+            (Vector3, float) next = points[i + 1];
+
+            float deltaTimeMs = next.Item2 - current.Item2;
+            if (Mathf.Abs(deltaTimeMs) < 0.0001f)
+                continue;
+
+            Vector3 temp = (next.Item1 - current.Item1) / deltaTimeMs;
+            dir += temp;
+
+            if (temp.magnitude > magnitude)
+                magnitude = temp.magnitude;
+        }
+
+        if (dir.sqrMagnitude < 0.0001f || magnitude < 0.0001f)
+        {
+            CancelPendingThrow("Throw cancelled: not enough movement direction.");
             return;
         }
 
         speed = dir.normalized;
         speed *= magnitude;
-        speed *= 1000f; // convert from units/ms to units/s
+        speed *= 1000f;
         speed *= speedFactor;
-        speed *= Constants.GetComponent<ConstantsScript>().DartsSpeed;
+
+        if (Constants != null)
+            speed *= Constants.GetComponent<ConstantsScript>().DartsSpeed;
+
+        if (speed.magnitude < minimumThrowVelocity)
+        {
+            CancelPendingThrow("Throw cancelled: release velocity is too low.");
+            return;
+        }
 
         float releaseAngle = CalculateReleaseAngle(speed);
         string feedback = GetAngleFeedback(releaseAngle);
@@ -231,6 +278,23 @@ public class InputController : MonoBehaviour
 
         Dart.transform.parent = null;
         Dart = null;
+
+        track.Clear();
+        SetAimAssistVisible(false);
+    }
+
+    private void CancelPendingThrow(string reason)
+    {
+        Debug.Log(reason);
+
+        if (Dart != null)
+        {
+            Destroy(Dart);
+            Dart = null;
+        }
+
+        track.Clear();
+        currentStabilityScore = 0f;
         SetAimAssistVisible(false);
     }
 
@@ -253,14 +317,16 @@ public class InputController : MonoBehaviour
     {
         if (angle < 5f)
             return "Too flat";
-        else if (angle > 20f)
+        if (angle > 20f)
             return "Too steep";
-        else
-            return "Good release angle";
+        return "Good release angle";
     }
 
     private void moveDart()
     {
+        if (Dart == null)
+            return;
+
         if (!HandJointUtils.TryGetJointPose(TrackedHandJoint.IndexKnuckle, trackedHand, out MixedRealityPose index_back))
             return;
         if (!HandJointUtils.TryGetJointPose(TrackedHandJoint.IndexTip, trackedHand, out MixedRealityPose index_front))
@@ -299,11 +365,10 @@ public class InputController : MonoBehaviour
             aimAssistMarker.transform.forward = hit.normal;
             SetAimAssistVisible(true);
             UpdateAimAssistColor();
+            return;
         }
-        else
-        {
-            SetAimAssistVisible(false);
-        }
+
+        SetAimAssistVisible(false);
     }
 
     private void EnsureAimAssistMarker()
@@ -314,6 +379,8 @@ public class InputController : MonoBehaviour
             aimAssistMarker.name = "AimAssistMarkerRuntime";
             aimAssistMarker.transform.localScale = Vector3.one * 0.015f;
             aimAssistMarker.layer = (int)Layers.UI;
+            createdAimAssistMarkerRuntime = true;
+
             Collider markerCollider = aimAssistMarker.GetComponent<Collider>();
             if (markerCollider != null)
                 Destroy(markerCollider);
@@ -340,33 +407,50 @@ public class InputController : MonoBehaviour
     private float CalculateStabilityScore()
     {
         List<(Vector3, float)> points = track.ToList();
-        if (points.Count < 3)
+        if (points.Count < 4)
             return 0f;
 
         List<float> speeds = new List<float>();
+        List<Vector3> directions = new List<Vector3>();
+
         for (int i = 0; i + 1 < points.Count; i++)
         {
             float deltaTimeMs = points[i + 1].Item2 - points[i].Item2;
             if (Mathf.Abs(deltaTimeMs) < 0.0001f)
                 continue;
 
-            Vector3 deltaPos = points[i + 1].Item1 - points[i].Item1;
-            float speedMetersPerSecond = (deltaPos.magnitude / deltaTimeMs) * 1000f;
-            speeds.Add(speedMetersPerSecond);
+            Vector3 velocitySegment = ((points[i + 1].Item1 - points[i].Item1) / deltaTimeMs) * 1000f;
+            float segmentSpeed = velocitySegment.magnitude;
+            speeds.Add(segmentSpeed);
+
+            if (segmentSpeed > 0.0001f)
+                directions.Add(velocitySegment.normalized);
         }
 
-        if (speeds.Count == 0)
+        if (speeds.Count < 2)
             return 0f;
 
-        float mean = speeds.Average();
+        float meanSpeed = speeds.Average();
         float meanAbsDeviation = 0f;
         for (int i = 0; i < speeds.Count; i++)
-        {
-            meanAbsDeviation += Mathf.Abs(speeds[i] - mean);
-        }
+            meanAbsDeviation += Mathf.Abs(speeds[i] - meanSpeed);
+
         meanAbsDeviation /= speeds.Count;
 
-        return 1f - Mathf.Clamp01(meanAbsDeviation / Mathf.Max(0.0001f, stabilityVarianceMax));
+        float speedConsistency = 1f - Mathf.Clamp01(meanAbsDeviation / Mathf.Max(0.0001f, stabilityVarianceMax));
+
+        float directionConsistency = 1f;
+        if (directions.Count > 1)
+        {
+            float dotSum = 0f;
+            for (int i = 1; i < directions.Count; i++)
+                dotSum += (Vector3.Dot(directions[i - 1], directions[i]) + 1f) * 0.5f;
+
+            directionConsistency = dotSum / (directions.Count - 1);
+        }
+
+        float stability = speedConsistency * 0.7f + directionConsistency * 0.3f;
+        return Mathf.Clamp01(stability);
     }
 
     public float GetCurrentStabilityScore()
@@ -390,7 +474,10 @@ public class InputController : MonoBehaviour
 
     private void moveBoard()
     {
-        if (!HandJointUtils.TryGetJointPose(TrackedHandJoint.Palm, Handedness.Right, out MixedRealityPose jointPose))
+        if (Board == null)
+            return;
+
+        if (!HandJointUtils.TryGetJointPose(TrackedHandJoint.Palm, trackedHand, out MixedRealityPose jointPose))
             return;
 
         Board.GetComponent<BoardHandler>().projectTo(jointPose.Position, jointPose.Forward);

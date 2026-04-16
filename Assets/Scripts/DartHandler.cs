@@ -1,8 +1,6 @@
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.Serialization;
 
 public class DartHandler : MonoBehaviour
 {
@@ -20,9 +18,10 @@ public class DartHandler : MonoBehaviour
 
     [SerializeField]
     private Vector3 defaultAcceleration = new Vector3(0, -6, 0);
-    private Vector3 acceleration = new Vector3(0, -6, 0);
 
+    private Vector3 acceleration = new Vector3(0, -6, 0);
     private bool stopped = false;
+    private bool hasRegisteredBoardHit = false;
 
     [Header("Training Data")]
     public Vector3 releaseVelocity;
@@ -32,16 +31,22 @@ public class DartHandler : MonoBehaviour
 
     void Start()
     {
+        acceleration = defaultAcceleration;
+
+        if (Constants != null)
+            return;
+
         List<GameObject> rootObjects = new List<GameObject>();
         Scene scene = SceneManager.GetActiveScene();
-
         scene.GetRootGameObjects(rootObjects);
 
-        foreach (GameObject go in rootObjects)
+        for (int i = 0; i < rootObjects.Count; i++)
         {
+            GameObject go = rootObjects[i];
             if (go.name == "Constants")
             {
                 Constants = go;
+                break;
             }
         }
     }
@@ -49,13 +54,15 @@ public class DartHandler : MonoBehaviour
     public void Pause(bool pause)
     {
         stopped = pause;
-        trail.enabled = !pause;
+        if (trail != null)
+            trail.enabled = !pause;
     }
 
     public void SetVelocity(Vector3 velocity)
     {
         this.velocity = velocity;
-        trail.enabled = true;
+        if (trail != null)
+            trail.enabled = true;
     }
 
     public void SetThrowData(Vector3 velocity, float angle, string feedback, float stabilityScore)
@@ -68,69 +75,72 @@ public class DartHandler : MonoBehaviour
 
     void Update()
     {
-        if (!stopped)
+        if (stopped)
+            return;
+
+        float gravityMultiplier = 1f;
+        if (Constants != null)
+            gravityMultiplier = Constants.GetComponent<ConstantsScript>().Gravity;
+
+        velocity += acceleration * gravityMultiplier * Time.deltaTime;
+
+        int layerMaskCombined =
+              (1 << (int)Layers.UI)
+            | (1 << (int)Layers.Menu)
+            | (1 << (int)Layers.Dart)
+            | (1 << (int)Layers.Gravity);
+
+        layerMaskCombined = ~layerMaskCombined;
+        Vector3 dir = velocity.normalized;
+        Vector3 from = transform.position + dir * 0.05f;
+
+        RaycastHit hit;
+        if (Physics.Raycast(from, dir, out hit, (velocity * Time.deltaTime).magnitude, layerMaskCombined))
         {
-            Vector3 acc = Vector3.zero;
-            acc += acceleration;
-            acc *= Constants.GetComponent<ConstantsScript>().Gravity;
-            velocity += acc * Time.deltaTime;
+            if (hit.collider.gameObject.name != "Dartboard")
+                Debug.Log(hit.collider.gameObject.name);
 
-            int layerMaskCombined =
-                  (1 << (int)Layers.UI)
-                | (1 << (int)Layers.Menu)
-                | (1 << (int)Layers.Dart)
-                | (1 << (int)Layers.Gravity);
-
-            layerMaskCombined = ~layerMaskCombined;
-            Vector3 dir = velocity.normalized;
-            Vector3 from = transform.position + dir * 0.05f;
-            RaycastHit hit;
-
-            if (Physics.Raycast(from, dir, out hit, (velocity * Time.deltaTime).magnitude, layerMaskCombined))
-            {
-                if (hit.collider.gameObject.name != "Dartboard")
-                    Debug.Log(hit.collider.gameObject.name);
-
-                transform.position = hit.point;
-                velocity = Vector3.zero;
-                stopped = true;
-            }
-            else
-            {
-                transform.position += velocity * Time.deltaTime;
-            }
-
-            if (velocity.magnitude > 0.01f)
-                transform.forward = velocity.normalized;
+            transform.position = hit.point;
+            velocity = Vector3.zero;
+            stopped = true;
         }
+        else
+        {
+            transform.position += velocity * Time.deltaTime;
+        }
+
+        if (velocity.magnitude > 0.01f)
+            transform.forward = velocity.normalized;
     }
 
     void OnTriggerEnter(Collider collision)
     {
-        if (true)
+        if (collision.CompareTag("Menu"))
+            return;
+
+        if (collision.CompareTag("Gravity"))
         {
-            Debug.Log(collision.tag);
+            GravityField field = collision.gameObject.GetComponent<GravityField>();
+            if (field != null)
+                acceleration = field.getGravity();
+            return;
+        }
 
-            if (collision.tag == "Menu")
-                return;
+        if (stopped)
+            return;
 
-            if (collision.tag == "Gravity")
-            {
-                acceleration = collision.gameObject.GetComponent<GravityField>().getGravity();
-            }
-            else
-            {
-                transform.position += velocity.normalized * 0.007f;
-                velocity = Vector3.zero;
-                stopped = true;
+        transform.position += velocity.normalized * 0.007f;
+        velocity = Vector3.zero;
+        stopped = true;
 
-                if (collision.tag == "Board")
-                {
-                    transform.parent = collision.gameObject.transform;
-                    BoardHandler board = collision.gameObject.GetComponent<BoardHandler>();
-                    board.hit(gameObject);
-                }
-            }
+        if (collision.CompareTag("Board") && !hasRegisteredBoardHit)
+        {
+            hasRegisteredBoardHit = true;
+            transform.parent = collision.gameObject.transform;
+
+            BoardHandler board = collision.gameObject.GetComponent<BoardHandler>();
+            if (board != null)
+                board.hit(gameObject);
         }
     }
 }

@@ -1,33 +1,15 @@
-using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
-using UnityEngine.UI;
 using Microsoft.MixedReality.Toolkit.UI;
-using UnityEngine.SceneManagement;
-using Unity.XR.CoreUtils;
 using TMPro;
-using static Microsoft.MixedReality.Toolkit.Experimental.UI.KeyboardKeyFunc;
-using UnityEngine.PlayerLoop;
-
-
-using UnityEngine.Serialization;
-using Microsoft;
-//using Microsoft.MixedReality.OpenXR;
-using Microsoft.MixedReality.Toolkit;
-using Microsoft.MixedReality.Toolkit.Input;
-using Microsoft.MixedReality.Toolkit.Utilities;
-using Microsoft.MixedReality.Toolkit.WindowsMixedReality;
+using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public class UIControllerScript : MonoBehaviour
 {
-
     public GameObject InputController;
-    public GameObject Board; //used to obtain current points
-    public GameObject Scoreboard; //display score text
-
-    //these two objects serve as toggle for the placement mode and the reset button
-    //public GameObject PlacementToggleObject;
-    //public GameObject ResetToggleObject;
+    public GameObject Board;
+    public GameObject Scoreboard;
+    public GameObject AnalyticsPanel;
 
     public GameObject GravitySlider;
     public GameObject SpeedSlider;
@@ -46,137 +28,148 @@ public class UIControllerScript : MonoBehaviour
 
     public GameObject levelButton;
 
-    // Start is called before the first frame update
+    [SerializeField]
+    private int recentThrowsShown = 6;
+
+    private TextMeshProUGUI scoreboardText = null;
+    private TextMeshProUGUI analyticsText = null;
+
     void Start()
     {
-        
+        if (Scoreboard != null)
+            scoreboardText = Scoreboard.GetComponent<TextMeshProUGUI>();
+
+        if (AnalyticsPanel != null)
+            analyticsText = AnalyticsPanel.GetComponent<TextMeshProUGUI>();
     }
 
-    // Update is called once per frame
     void Update()
     {
+        if (Board == null || scoreboardText == null)
+            return;
+
         BoardHandler boardHandler = Board.GetComponent<BoardHandler>();
-        int score = boardHandler.GetPoints();
-        int num_darts = GetNumberOfHitDarts();
-        float stabilityScore = InputController.GetComponent<InputController>().GetCurrentStabilityScore();
+        if (boardHandler == null)
+            return;
 
-        Scoreboard.GetComponent<TextMeshProUGUI>().text =
-            $"\r\nPOINTS: \r\n{score}\r\n\r\nDARTS HIT: \r\n{num_darts}" +
-            $"\r\n\r\nSTABILITY: \r\n{stabilityScore:F2}" +
-            $"\r\n\r\n{boardHandler.LastThrowSummary}";
+        float stabilityScore = 0f;
+        if (InputController != null)
+        {
+            InputController input = InputController.GetComponent<InputController>();
+            if (input != null)
+                stabilityScore = input.GetCurrentStabilityScore();
+        }
 
+        scoreboardText.text =
+            "\r\nPOINTS: \r\n" + boardHandler.GetPoints() +
+            "\r\n\r\nDARTS HIT: \r\n" + boardHandler.GetHitCount() +
+            "\r\n\r\nSTABILITY: \r\n" + stabilityScore.ToString("F2") +
+            "\r\n\r\n" + boardHandler.LastThrowSummary;
+
+        string panelText = boardHandler.GetAnalyticsPanelText(recentThrowsShown);
+        if (analyticsText != null)
+            analyticsText.text = panelText;
+        else
+            scoreboardText.text += "\n\n" + panelText;
     }
 
     public void SetGravity(SliderEventData eventData)
     {
         float newValue = GravityMultiplier * eventData.NewValue;
 
-        GravityDisplay.GetComponent<TextMeshPro>().text = $"{newValue:F2}";
-        Constants.GetComponent<ConstantsScript>().Gravity = newValue;
+        if (GravityDisplay != null)
+            GravityDisplay.GetComponent<TextMeshPro>().text = $"{newValue:F2}";
+
+        if (Constants != null)
+            Constants.GetComponent<ConstantsScript>().Gravity = newValue;
     }
 
     public void SetSpeed(SliderEventData eventData)
     {
-
         float newValue = SpeedMultiplier * eventData.NewValue;
-        SpeedDisplay.GetComponent<TextMeshPro>().text = $"{newValue:F2}";
-        Constants.GetComponent<ConstantsScript>().DartsSpeed = newValue;
+
+        if (SpeedDisplay != null)
+            SpeedDisplay.GetComponent<TextMeshPro>().text = $"{newValue:F2}";
+
+        if (Constants != null)
+            Constants.GetComponent<ConstantsScript>().DartsSpeed = newValue;
     }
 
     public void ToggleSliderActive()
     {
-        if (GravitySlider.activeSelf)
-        {
-            GravitySlider.SetActive(false);
-            SpeedSlider.SetActive(false);
-        }
-        else
-        {
-            GravitySlider.SetActive(true);
-            SpeedSlider.SetActive(true);
-        }
+        if (GravitySlider == null || SpeedSlider == null)
+            return;
+
+        bool shouldEnable = !GravitySlider.activeSelf;
+        GravitySlider.SetActive(shouldEnable);
+        SpeedSlider.SetActive(shouldEnable);
     }
 
-    //when pressing the "place board" button, enable board placement
     public void SetBoardState()
     {
+        if (InputController == null)
+            return;
+
         Debug.Log("Switched to Board state! (Reason: Board placement button pressed)");
         InputController.GetComponent<InputController>().SetGameState(Modes.Board);
     }
 
-
-    //select which gamemode is currently being played (for the future)
-    void SetGameMode()
-    {
-        //doesn't do anything yet
-    }
-
     public void ChangeLevel()
     {
+        if (Levels == null || Levels.Count == 0)
+            return;
+
         currentLevel = (currentLevel + 1) % Levels.Count;
 
         for (int i = 0; i < Levels.Count; i++)
+            Levels[i].SetActive(i == currentLevel);
+
+        if (levelButton != null)
         {
-            if (i == currentLevel)
-            {
-                Levels[i].SetActive(true);
-            }
-            else
-            {
-                Levels[i].SetActive(false);
-            }
+            ButtonConfigHelper helper = levelButton.GetComponent<ButtonConfigHelper>();
+            if (helper != null)
+                helper.MainLabelText = $"Change level\r\nCurrent level: {currentLevel}";
         }
-
-        levelButton.GetComponent<ButtonConfigHelper>().MainLabelText = $"Change level\r\nCurrent level: {currentLevel}";
-
     }
 
     public int GetNumberOfHitDarts()
     {
-        int darts_counter = 0;
-        /*foreach (Transform child in Board.transform)
-        {
-            if (child.gameObject.tag == "Dart")
-            {
-                darts_counter++;
-            }
-        }*/
+        if (Board == null)
+            return 0;
 
-        foreach (int elem in Board.GetComponent<BoardHandler>().points)
-        {
-            if (elem != 0)
-            { 
-                darts_counter++;
-            }
-        }
+        BoardHandler boardHandler = Board.GetComponent<BoardHandler>();
+        if (boardHandler == null)
+            return 0;
 
-        return darts_counter;
+        return boardHandler.GetHitCount();
     }
 
-    //set the counter on the board to zero and destory all Dart game objects
     public void ResetGame()
     {
-        Board.GetComponent<BoardHandler>().ResetPoints();
+        if (Board != null)
+        {
+            BoardHandler boardHandler = Board.GetComponent<BoardHandler>();
+            if (boardHandler != null)
+                boardHandler.ResetPoints();
+        }
 
         List<GameObject> rootObjects = new List<GameObject>();
         Scene scene = SceneManager.GetActiveScene();
-
         scene.GetRootGameObjects(rootObjects);
 
-        foreach (GameObject go in rootObjects)
+        for (int i = 0; i < rootObjects.Count; i++)
         {
-            if(go.tag == "Dart")
-            {
+            GameObject go = rootObjects[i];
+            if (go.tag == "Dart")
                 Destroy(go);
-            }
         }
 
-        //if a dart hits the board, it is appended to the board as a child, so we also need to go over all the children of the board and destroy them
-        foreach(Transform child in Board.transform)
+        if (Board != null)
         {
-            if (child.gameObject.tag == "Dart")
+            foreach (Transform child in Board.transform)
             {
-                Destroy(child.gameObject);
+                if (child.gameObject.tag == "Dart")
+                    Destroy(child.gameObject);
             }
         }
     }
