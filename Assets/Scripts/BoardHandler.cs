@@ -373,7 +373,7 @@ public class BoardHandler : MonoBehaviour
         if (points.Count == 0)
             return 0f;
 
-        return points.Average();
+        return (float)points.Average();
     }
 
     public float GetAverageStability()
