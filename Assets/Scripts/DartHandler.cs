@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.Serialization;
 
+
 public class DartHandler : MonoBehaviour
 {
     [SerializeField]
@@ -20,18 +21,16 @@ public class DartHandler : MonoBehaviour
 
     [SerializeField]
     private Vector3 defaultAcceleration = new Vector3(0, -6, 0);
-    private Vector3 acceleration = new Vector3(0, -6, 0);
+    private Vector3 acceleration = new Vector3(0,-6, 0);
 
     private bool stopped = false;
 
-    [Header("Training Data")]
-    public Vector3 releaseVelocity;
-    public float releaseAngle;
-    public string releaseFeedback;
-    public float releaseStabilityScore;
-
+    // Start is called before the first frame update
     void Start()
     {
+        // trail = Trail.GetComponent<TrailRenderer>();
+        //Debug.Log(trail);
+
         List<GameObject> rootObjects = new List<GameObject>();
         Scene scene = SceneManager.GetActiveScene();
 
@@ -49,6 +48,7 @@ public class DartHandler : MonoBehaviour
     public void Pause(bool pause)
     {
         stopped = pause;
+        //Debug.Log(trail);
         trail.enabled = !pause;
     }
 
@@ -58,26 +58,23 @@ public class DartHandler : MonoBehaviour
         trail.enabled = true;
     }
 
-    public void SetThrowData(Vector3 velocity, float angle, string feedback, float stabilityScore)
-    {
-        releaseVelocity = velocity;
-        releaseAngle = angle;
-        releaseFeedback = feedback;
-        releaseStabilityScore = stabilityScore;
-    }
-
+    // Update is called once per frame
     void Update()
     {
         if (!stopped)
         {
+
             Vector3 acc = Vector3.zero;
             acc += acceleration;
             acc *= Constants.GetComponent<ConstantsScript>().Gravity;
             velocity += acc * Time.deltaTime;
 
+
+            // Raycast to ensure dart, does not clip through other gameobjects
             int layerMaskCombined =
                   (1 << (int)Layers.UI)
                 | (1 << (int)Layers.Menu)
+                //| (1 << (int)Layers.Board)
                 | (1 << (int)Layers.Dart)
                 | (1 << (int)Layers.Gravity);
 
@@ -85,32 +82,29 @@ public class DartHandler : MonoBehaviour
             Vector3 dir = velocity.normalized;
             Vector3 from = transform.position + dir * 0.05f;
             RaycastHit hit;
-
             if (Physics.Raycast(from, dir, out hit, (velocity * Time.deltaTime).magnitude, layerMaskCombined))
             {
                 if (hit.collider.gameObject.name != "Dartboard")
                     Debug.Log(hit.collider.gameObject.name);
-
                 transform.position = hit.point;
                 velocity = Vector3.zero;
                 stopped = true;
-            }
-            else
+            } else
             {
                 transform.position += velocity * Time.deltaTime;
             }
 
-            if (velocity.magnitude > 0.01f)
+
+            if (velocity.magnitude > 0.01)
                 transform.forward = velocity.normalized;
         }
     }
 
     void OnTriggerEnter(Collider collision)
     {
-        if (true)
+        if (true) // TODO: (!stopped)
         {
             Debug.Log(collision.tag);
-
             if (collision.tag == "Menu")
                 return;
 
@@ -127,8 +121,11 @@ public class DartHandler : MonoBehaviour
                 if (collision.tag == "Board")
                 {
                     transform.parent = collision.gameObject.transform;
+                    //transform.localPosition = Vector3.zero;
+                    //transform.localRotation = Quaternion.identity;
                     BoardHandler board = collision.gameObject.GetComponent<BoardHandler>();
-                    board.hit(gameObject);
+                    board.hit(Dart);
+
                 }
             }
         }

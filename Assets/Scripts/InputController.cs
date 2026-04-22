@@ -1,10 +1,11 @@
-using Microsoft.MixedReality.Toolkit.Utilities;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.SceneManagement;
-using System.Linq;
+using UnityEngine.Serialization;
+using Microsoft;
 using Microsoft.MixedReality.Toolkit;
 using Microsoft.MixedReality.Toolkit.Input;
+using Microsoft.MixedReality.Toolkit.Utilities;
 using Microsoft.MixedReality.Toolkit.WindowsMixedReality;
 
 using Handedness = Microsoft.MixedReality.Toolkit.Utilities.Handedness;
@@ -34,22 +35,37 @@ public class InputController : MonoBehaviour
 
     private Vector3 speed = Vector3.zero;
     private Queue<(Vector3, float)> track = new Queue<(Vector3, float)>();
-    private float currentStabilityScore = 0f;
 
-    [Header("Aim Assist")]
+    [Header("Board Placement Settings")]
     [SerializeField]
-    private bool enableAimAssist = true;
+    private float boardLockHoldTime = 2.0f;
+
     [SerializeField]
-    private GameObject aimAssistMarker = null;
+    private float boardStillThreshold = 0.03f;
+
+    private bool boardPlacementActive = false;
+    private float openPalmHoldStart = -1f;
+    private Vector3 lastBoardPosition = Vector3.zero;
+
+    [Header("Reset Gesture Settings")]
     [SerializeField]
-    private float aimAssistRayDistance = 6f;
+    private GameObject UIControllerObject = null;
+
     [SerializeField]
-    private float stabilityVarianceMax = 0.8f;
-    private Renderer aimAssistRenderer = null;
+    private float resetGestureCooldown = 1.5f;
+
+    [SerializeField]
+    private float doubleGrabMaxDelay = 0.8f;
+
+    private float lastResetGestureTime = -10f;
+    private float lastGrabTime = -10f;
+    private int grabCount = 0;
+    private bool grabWasActiveLastFrame = false;
 
     [Header("Gameobjects")]
     [SerializeField]
     private GameObject Board = null;
+
     [SerializeField]
     private GameObject Line = null;
 
@@ -70,12 +86,37 @@ public class InputController : MonoBehaviour
         Debug.Log("Started");
         mode = Modes.Board;
         gestureHandler = gestureObject.GetComponent<GestureHandler>();
-        EnsureAimAssistMarker();
-        SetAimAssistVisible(false);
+    }
+
+    IEnumerator waiter()
+    {
+        yield return new WaitForSeconds(0.05f);
+        int nmb = 50;
+        for (int i = 0; i < nmb; i++)
+        {
+            float x = Random.Range(-0.07f, 0.07f);
+            float y = Random.Range(-0.07f, 0.07f);
+            GameObject dart = (GameObject)Instantiate(DartPrefab, new Vector3(x, y, 0), Quaternion.identity);
+            dart.GetComponent<DartHandler>().SetVelocity(new Vector3(0, 5, 7));
+            if (i != nmb - 1)
+                yield return new WaitForSeconds(0.05f);
+        }
     }
 
     void FixedUpdate()
     {
+        // Double-grab reset only outside board placement mode
+        if (mode != Modes.Board)
+        {
+            HandleDoubleGrabReset();
+        }
+        else
+        {
+            // prevent stale grab state while placing board
+            grabWasActiveLastFrame = false;
+            grabCount = 0;
+        }
+
         switch (mode)
         {
             case Modes.Idle:
@@ -99,37 +140,127 @@ public class InputController : MonoBehaviour
     public void SetGameState(Modes mode)
     {
         this.mode = mode;
+
+        if (mode == Modes.Board)
+        {
+            boardPlacementActive = false;
+            openPalmHoldStart = -1f;
+        }
+    }
+
+    private void TriggerResetDarts()
+    {
+        if (Time.time - lastResetGestureTime < resetGestureCooldown)
+            return;
+
+        if (UIControllerObject != null)
+        {
+            UIControllerObject.GetComponent<UIControllerScript>().ResetGame();
+            Debug.Log("Reset / collect darts triggered");
+        }
+        else
+        {
+            Debug.LogWarning("UIControllerObject is not assigned in InputController.");
+        }
+
+        lastResetGestureTime = Time.time;
+    }
+
+    private void HandleDoubleGrabReset()
+    {
+        Gesture currentGesture = gestureHandler.GetGesture();
+        bool grabIsActive = (currentGesture == Gesture.Grab);
+
+        // Detect only the moment the user STARTS a grab
+        if (grabIsActive && !grabWasActiveLastFrame)
+        {
+            float timeSinceLastGrab = Time.time - lastGrabTime;
+
+            if (timeSinceLastGrab <= doubleGrabMaxDelay)
+            {
+                grabCount++;
+            }
+            else
+            {
+                grabCount = 1;
+            }
+
+            lastGrabTime = Time.time;
+            Debug.Log($"Double grab progress: {grabCount}");
+
+            if (grabCount >= 2)
+            {
+                TriggerResetDarts();
+                grabCount = 0;
+            }
+        }
+
+        grabWasActiveLastFrame = grabIsActive;
     }
 
     private Modes idle_state(Modes mode)
     {
-        SetAimAssistVisible(false);
-
         switch (gestureHandler.GetGesture())
         {
             case Gesture.Pinch:
                 generateDart();
                 return Modes.Dart;
+
             default:
                 break;
         }
+
         return mode;
     }
 
     private Modes board_state(Modes mode)
     {
-        switch (gestureHandler.GetGesture())
+        Gesture gesture = gestureHandler.GetGesture();
+
+        if (gesture == Gesture.OpenPalm)
         {
-            case Gesture.Pinch:
+            moveBoard();
+            Line.SetActive(false);
+
+            Vector3 currentBoardPosition = Board.transform.position;
+
+            if (!boardPlacementActive)
+            {
+                boardPlacementActive = true;
+                openPalmHoldStart = Time.time;
+                lastBoardPosition = currentBoardPosition;
+                return mode;
+            }
+
+            float boardMovement = Vector3.Distance(currentBoardPosition, lastBoardPosition);
+
+            if (boardMovement > boardStillThreshold)
+            {
+                openPalmHoldStart = Time.time;
+            }
+
+            lastBoardPosition = currentBoardPosition;
+
+            float heldTime = Time.time - openPalmHoldStart;
+
+            if (heldTime >= boardLockHoldTime)
+            {
+                boardPlacementActive = false;
+                openPalmHoldStart = -1f;
+                Debug.Log("Board locked in place after stable hold");
                 return Modes.Idle;
-            default:
-                break;
+            }
+
+            return mode;
         }
 
-        moveBoard();
-        Line.SetActive(false);
-        SetAimAssistVisible(false);
+        if (boardPlacementActive && gesture != Gesture.OpenPalm)
+        {
+            boardPlacementActive = false;
+            openPalmHoldStart = -1f;
+        }
 
+        Line.SetActive(false);
         return mode;
     }
 
@@ -139,6 +270,7 @@ public class InputController : MonoBehaviour
         {
             case Gesture.Pinch:
                 break;
+
             default:
                 throwDart();
                 return Modes.Idle;
@@ -146,7 +278,6 @@ public class InputController : MonoBehaviour
 
         trackSpeed();
         moveDart();
-        UpdateAimAssist();
         Line.SetActive(true);
 
         return mode;
@@ -156,8 +287,6 @@ public class InputController : MonoBehaviour
     {
         Dart = (GameObject)Instantiate(DartPrefab, new Vector3(0, 0, 0), Quaternion.identity);
         Dart.GetComponent<DartHandler>().Pause(true);
-
-        track.Clear();
     }
 
     private void trackSpeed()
@@ -172,8 +301,6 @@ public class InputController : MonoBehaviour
 
         while (track.Count > 0 && track.Peek().Item2 < currentTime - interval)
             track.Dequeue();
-
-        currentStabilityScore = CalculateStabilityScore();
     }
 
     private void throwDart()
@@ -182,7 +309,7 @@ public class InputController : MonoBehaviour
             return;
 
         Vector3 dir = Vector3.zero;
-        float magnitude = 0f;
+        float magnitude = 0;
         List<(Vector3, float)> points = new List<(Vector3, float)>(track);
 
         if (points.Count >= 2)
@@ -191,72 +318,27 @@ public class InputController : MonoBehaviour
             {
                 (Vector3, float) cur = points[i];
                 (Vector3, float) next = points[i + 1];
-
-                float deltaTime = cur.Item2 - next.Item2;
-                if (Mathf.Abs(deltaTime) < 0.0001f)
-                    continue;
-
-                Vector3 temp = (cur.Item1 - next.Item1) / deltaTime;
+                Vector3 temp = (cur.Item1 - next.Item1) / (cur.Item2 - next.Item2);
                 dir += temp;
-
                 if (temp.magnitude > magnitude)
                     magnitude = temp.magnitude;
             }
         }
 
-        if (dir.magnitude < 0.0001f || magnitude < 0.0001f)
-        {
-            Debug.Log("Throw cancelled: not enough movement data.");
-            return;
-        }
-
         speed = dir.normalized;
         speed *= magnitude;
-        speed *= 1000f; // convert from units/ms to units/s
+        speed *= 1000f;
         speed *= speedFactor;
         speed *= Constants.GetComponent<ConstantsScript>().DartsSpeed;
 
-        float releaseAngle = CalculateReleaseAngle(speed);
-        string feedback = GetAngleFeedback(releaseAngle);
-
-        Debug.Log($"[TRAINING] Release speed: {speed}");
-        Debug.Log($"[TRAINING] Release angle: {releaseAngle:F2} degrees");
-        Debug.Log($"[TRAINING] Feedback: {feedback}");
-        Debug.Log($"[TRAINING] Stability score: {currentStabilityScore:F2}");
+        Debug.Log(speed);
 
         DartHandler dart = Dart.GetComponent<DartHandler>();
-        dart.SetThrowData(speed, releaseAngle, feedback, currentStabilityScore);
         dart.SetVelocity(speed);
         dart.Pause(false);
 
         Dart.transform.parent = null;
         Dart = null;
-        SetAimAssistVisible(false);
-    }
-
-    private float CalculateReleaseAngle(Vector3 velocity)
-    {
-        Vector3 horizontalVelocity = new Vector3(velocity.x, 0f, velocity.z);
-
-        if (horizontalVelocity.magnitude < 0.0001f)
-            return 90f;
-
-        float angle = Vector3.Angle(horizontalVelocity, velocity);
-
-        if (velocity.y < 0f)
-            angle *= -1f;
-
-        return angle;
-    }
-
-    private string GetAngleFeedback(float angle)
-    {
-        if (angle < 5f)
-            return "Too flat";
-        else if (angle > 20f)
-            return "Too steep";
-        else
-            return "Good release angle";
     }
 
     private void moveDart()
@@ -278,100 +360,6 @@ public class InputController : MonoBehaviour
 
         Dart.transform.position = mid_front + dir * 0.07f - palm.Right * 0.015f + palm.Up * 0.015f;
         Dart.transform.forward = dir;
-    }
-
-    private void UpdateAimAssist()
-    {
-        if (!enableAimAssist || Dart == null || aimAssistMarker == null)
-        {
-            SetAimAssistVisible(false);
-            return;
-        }
-
-        int boardLayerMask = (1 << (int)Layers.Board);
-        Vector3 rayOrigin = Dart.transform.position + Dart.transform.forward * 0.02f;
-        Vector3 rayDirection = Dart.transform.forward.normalized;
-
-        RaycastHit hit;
-        if (Physics.Raycast(rayOrigin, rayDirection, out hit, aimAssistRayDistance, boardLayerMask))
-        {
-            aimAssistMarker.transform.position = hit.point + hit.normal * 0.0015f;
-            aimAssistMarker.transform.forward = hit.normal;
-            SetAimAssistVisible(true);
-            UpdateAimAssistColor();
-        }
-        else
-        {
-            SetAimAssistVisible(false);
-        }
-    }
-
-    private void EnsureAimAssistMarker()
-    {
-        if (aimAssistMarker == null)
-        {
-            aimAssistMarker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            aimAssistMarker.name = "AimAssistMarkerRuntime";
-            aimAssistMarker.transform.localScale = Vector3.one * 0.015f;
-            aimAssistMarker.layer = (int)Layers.UI;
-            Collider markerCollider = aimAssistMarker.GetComponent<Collider>();
-            if (markerCollider != null)
-                Destroy(markerCollider);
-        }
-
-        aimAssistRenderer = aimAssistMarker.GetComponent<Renderer>();
-    }
-
-    private void SetAimAssistVisible(bool visible)
-    {
-        if (aimAssistMarker != null && aimAssistMarker.activeSelf != visible)
-            aimAssistMarker.SetActive(visible);
-    }
-
-    private void UpdateAimAssistColor()
-    {
-        if (aimAssistRenderer == null)
-            return;
-
-        Color color = Color.Lerp(Color.red, Color.green, Mathf.Clamp01(currentStabilityScore));
-        aimAssistRenderer.material.color = color;
-    }
-
-    private float CalculateStabilityScore()
-    {
-        List<(Vector3, float)> points = track.ToList();
-        if (points.Count < 3)
-            return 0f;
-
-        List<float> speeds = new List<float>();
-        for (int i = 0; i + 1 < points.Count; i++)
-        {
-            float deltaTimeMs = points[i + 1].Item2 - points[i].Item2;
-            if (Mathf.Abs(deltaTimeMs) < 0.0001f)
-                continue;
-
-            Vector3 deltaPos = points[i + 1].Item1 - points[i].Item1;
-            float speedMetersPerSecond = (deltaPos.magnitude / deltaTimeMs) * 1000f;
-            speeds.Add(speedMetersPerSecond);
-        }
-
-        if (speeds.Count == 0)
-            return 0f;
-
-        float mean = speeds.Average();
-        float meanAbsDeviation = 0f;
-        for (int i = 0; i < speeds.Count; i++)
-        {
-            meanAbsDeviation += Mathf.Abs(speeds[i] - mean);
-        }
-        meanAbsDeviation /= speeds.Count;
-
-        return 1f - Mathf.Clamp01(meanAbsDeviation / Mathf.Max(0.0001f, stabilityVarianceMax));
-    }
-
-    public float GetCurrentStabilityScore()
-    {
-        return currentStabilityScore;
     }
 
     private Vector3 midpoint(Vector3 a, Vector3 b)

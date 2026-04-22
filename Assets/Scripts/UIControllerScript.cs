@@ -8,8 +8,6 @@ using Unity.XR.CoreUtils;
 using TMPro;
 using static Microsoft.MixedReality.Toolkit.Experimental.UI.KeyboardKeyFunc;
 using UnityEngine.PlayerLoop;
-
-
 using UnityEngine.Serialization;
 using Microsoft;
 //using Microsoft.MixedReality.OpenXR;
@@ -55,15 +53,13 @@ public class UIControllerScript : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        BoardHandler boardHandler = Board.GetComponent<BoardHandler>();
-        int score = boardHandler.GetPoints();
-        int num_darts = GetNumberOfHitDarts();
-        float stabilityScore = InputController.GetComponent<InputController>().GetCurrentStabilityScore();
+        //periodically update the UI scoreboard
+        //ScoreBoard.GetComponent<ButtonConfigHelper>().MainLabelText = $"Score: {Board.GetComponent<BoardHandler>().GetPoints()}"; //old version, where scoreboard was on the menu
+        //Debug.Log(Scoreboard.GetComponent<TextMeshProUGUI>().text);
 
-        Scoreboard.GetComponent<TextMeshProUGUI>().text =
-            $"\r\nPOINTS: \r\n{score}\r\n\r\nDARTS HIT: \r\n{num_darts}" +
-            $"\r\n\r\nSTABILITY: \r\n{stabilityScore:F2}" +
-            $"\r\n\r\n{boardHandler.LastThrowSummary}";
+        int score = Board.GetComponent<BoardHandler>().GetPoints();
+        int num_darts = GetNumberOfHitDarts();
+        Scoreboard.GetComponent<TextMeshProUGUI>().text = $"\r\nPOINTS: \r\n{score}\r\n\r\nDARTS HIT: \r\n{num_darts}";
 
     }
 
@@ -179,5 +175,10 @@ public class UIControllerScript : MonoBehaviour
                 Destroy(child.gameObject);
             }
         }
+
+
     }
+
+
+
 }
