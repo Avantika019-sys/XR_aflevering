@@ -10,6 +10,7 @@ public class UIControllerScript : MonoBehaviour
     public GameObject Board;
     public GameObject Scoreboard;
     public GameObject AnalyticsPanel;
+    public GameObject InstantFeedbackText;
 
     public GameObject GravitySlider;
     public GameObject SpeedSlider;
@@ -30,9 +31,18 @@ public class UIControllerScript : MonoBehaviour
 
     [SerializeField]
     private int recentThrowsShown = 6;
+    [SerializeField]
+    private float instantFeedbackVisibleSeconds = 1.35f;
+    [SerializeField]
+    private float instantFeedbackFadeSeconds = 0.35f;
 
     private TextMeshProUGUI scoreboardText = null;
     private TextMeshProUGUI analyticsText = null;
+    private TextMeshProUGUI instantFeedbackText = null;
+    private string activeInstantFeedback = string.Empty;
+    private Color activeInstantFeedbackColor = Color.white;
+    private float activeInstantFeedbackUntil = -1f;
+    private float lastConsumedInstantFeedbackTime = -1f;
 
     void Start()
     {
@@ -41,6 +51,9 @@ public class UIControllerScript : MonoBehaviour
 
         if (AnalyticsPanel != null)
             analyticsText = AnalyticsPanel.GetComponent<TextMeshProUGUI>();
+
+        if (InstantFeedbackText != null)
+            instantFeedbackText = InstantFeedbackText.GetComponent<TextMeshProUGUI>();
     }
 
     void Update()
@@ -60,7 +73,10 @@ public class UIControllerScript : MonoBehaviour
                 stabilityScore = input.GetCurrentStabilityScore();
         }
 
+        SyncInstantFeedback(boardHandler);
+        string inlineFeedback = BuildInlineFeedbackText();
         scoreboardText.text =
+            inlineFeedback +
             "\r\nPOINTS: \r\n" + boardHandler.GetPoints() +
             "\r\n\r\nDARTS HIT: \r\n" + boardHandler.GetHitCount() +
             "\r\n\r\nSTABILITY: \r\n" + stabilityScore.ToString("F2") +
@@ -71,6 +87,57 @@ public class UIControllerScript : MonoBehaviour
             analyticsText.text = panelText;
         else
             scoreboardText.text += "\n\n" + panelText;
+    }
+
+    private void SyncInstantFeedback(BoardHandler boardHandler)
+    {
+        if (boardHandler.LastInstantFeedbackTime > lastConsumedInstantFeedbackTime)
+        {
+            lastConsumedInstantFeedbackTime = boardHandler.LastInstantFeedbackTime;
+            activeInstantFeedback = boardHandler.LastInstantFeedback;
+            activeInstantFeedbackColor = boardHandler.LastInstantFeedbackColor;
+            activeInstantFeedbackUntil = Time.time + Mathf.Max(0.1f, instantFeedbackVisibleSeconds);
+        }
+
+        if (instantFeedbackText == null)
+            return;
+
+        if (!HasActiveInstantFeedback())
+        {
+            instantFeedbackText.text = string.Empty;
+            return;
+        }
+
+        Color color = activeInstantFeedbackColor;
+        color.a = GetInstantFeedbackAlpha();
+        instantFeedbackText.text = activeInstantFeedback;
+        instantFeedbackText.color = color;
+    }
+
+    private bool HasActiveInstantFeedback()
+    {
+        return !string.IsNullOrEmpty(activeInstantFeedback) && Time.time <= activeInstantFeedbackUntil;
+    }
+
+    private float GetInstantFeedbackAlpha()
+    {
+        float fade = Mathf.Max(0.001f, instantFeedbackFadeSeconds);
+        float fadeStart = activeInstantFeedbackUntil - fade;
+        if (Time.time <= fadeStart)
+            return 1f;
+
+        return Mathf.Clamp01((activeInstantFeedbackUntil - Time.time) / fade);
+    }
+
+    private string BuildInlineFeedbackText()
+    {
+        if (instantFeedbackText != null || !HasActiveInstantFeedback())
+            return string.Empty;
+
+        Color color = activeInstantFeedbackColor;
+        color.a = GetInstantFeedbackAlpha();
+        string hex = ColorUtility.ToHtmlStringRGBA(color);
+        return $"<color=#{hex}>FEEDBACK: {activeInstantFeedback}</color>\r\n\r\n";
     }
 
     public void SetGravity(SliderEventData eventData)

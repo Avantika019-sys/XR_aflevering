@@ -64,6 +64,10 @@ public class BoardHandler : MonoBehaviour
     public string LastThrowSummary { get; private set; } = "Throw feedback appears after the first hit.";
     public string LastCoachTip { get; private set; } = "Throw to get a coaching tip.";
     public string LastAdaptiveAimHint { get; private set; } = "Collecting throw pattern...";
+    public string LastInstantFeedback { get; private set; } = "Throw to start feedback.";
+    public Color LastInstantFeedbackColor { get; private set; } = Color.white;
+    public float LastInstantFeedbackTime { get; private set; } = -1f;
+    public int CurrentHitStreak { get; private set; } = 0;
 
     [Header("Mistake Classifier Thresholds")]
     [SerializeField]
@@ -130,6 +134,7 @@ public class BoardHandler : MonoBehaviour
 
         int score = calculatePoints(hitX, hitY);
         points.Add(score);
+        UpdateHitStreak(score);
 
         string mistake = "No throw analytics";
         string confidence = "Low";
@@ -171,6 +176,7 @@ public class BoardHandler : MonoBehaviour
             $"Score: {score} | Stability: {stabilityScore:F2}\n" +
             $"Tip: {tip}\n" +
             $"Aim Assist: {LastAdaptiveAimHint}";
+        UpdateInstantFeedback(score, mistake);
 
         AddThrowRecord(new ThrowRecord(
             points.Count,
@@ -441,11 +447,58 @@ public class BoardHandler : MonoBehaviour
         LastThrowSummary = "Throw feedback appears after the first hit.";
         LastCoachTip = "Throw to get a coaching tip.";
         LastAdaptiveAimHint = "Collecting throw pattern...";
+        LastInstantFeedback = "Throw to start feedback.";
+        LastInstantFeedbackColor = Color.white;
+        LastInstantFeedbackTime = -1f;
+        CurrentHitStreak = 0;
 
         throwHistory.Clear();
         recentHitXs.Clear();
         recentHitYs.Clear();
         recentReleaseSpeeds.Clear();
+    }
+
+    private void UpdateHitStreak(int score)
+    {
+        if (score > 0)
+        {
+            CurrentHitStreak++;
+            return;
+        }
+
+        CurrentHitStreak = 0;
+    }
+
+    private void UpdateInstantFeedback(int score, string mistake)
+    {
+        string mainMessage;
+        Color feedbackColor;
+
+        if (score == 50)
+        {
+            mainMessage = "BULLSEYE! +50";
+            feedbackColor = new Color(0.15f, 0.95f, 0.25f);
+        }
+        else if (score >= 40)
+        {
+            mainMessage = $"Great hit! +{score}";
+            feedbackColor = new Color(0.35f, 0.9f, 0.3f);
+        }
+        else if (score > 0)
+        {
+            mainMessage = $"Hit! +{score}";
+            feedbackColor = new Color(0.85f, 0.9f, 0.25f);
+        }
+        else
+        {
+            mainMessage = "Missed";
+            feedbackColor = new Color(1f, 0.45f, 0.35f);
+        }
+
+        string streakText = CurrentHitStreak >= 2 ? $"  STREAK x{CurrentHitStreak}" : string.Empty;
+        LastInstantFeedback = $"{mainMessage}{streakText}  ({mistake})";
+        LastInstantFeedbackColor = feedbackColor;
+        LastInstantFeedbackTime = Time.time;
     }
 
     private void UpdateHistory(float hitX, float hitY, float releaseSpeed, bool includeReleaseSpeed)
