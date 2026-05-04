@@ -11,7 +11,9 @@ public enum Gesture
     None,
     Pinch,
     Grab,
-    OpenPalm
+    Peace,
+    OpenPalm,
+    ThumbsUp
 }
 
 public class GestureHandler : MonoBehaviour
@@ -36,18 +38,22 @@ public class GestureHandler : MonoBehaviour
 
     void FixedUpdate()
     {
-        if (HandJointUtils.FindHand(handedness) is null)
-            return;
-
         Gesture newGesture = Gesture.None;
 
-        if (GestureUtils.IsOpenPalm(handedness))
-            newGesture = Gesture.OpenPalm;
-        else if (GestureUtils.IsPinching(handedness))
-            newGesture = Gesture.Pinch;
-        else if (GestureUtils.IsGrabbing(handedness))
-            newGesture = Gesture.Grab;
-
+        if (HandJointUtils.FindHand(handedness) != null)
+        {
+            if (GestureUtils.IsThumbsUp(handedness))
+                newGesture = Gesture.ThumbsUp;
+            else if (GestureUtils.IsPeaceSign(handedness))
+                newGesture = Gesture.Peace;
+            else if (GestureUtils.IsOpenPalm(handedness))
+                newGesture = Gesture.OpenPalm;
+            else if (GestureUtils.IsPinching(handedness))
+                newGesture = Gesture.Pinch;
+            else if (GestureUtils.IsGrabbing(handedness))
+                newGesture = Gesture.Grab;
+        }
+            
         if (newGesture != currentGesture)
         {
             gestureStart = Time.time;

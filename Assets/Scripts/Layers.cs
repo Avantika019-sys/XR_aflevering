@@ -14,4 +14,3 @@ public enum Layers
 
     SpatialAwareness = 31
 }
-

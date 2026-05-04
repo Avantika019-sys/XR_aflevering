@@ -33,7 +33,7 @@ public class BoardHandler : MonoBehaviour
     {
     }
 
-    public void hit(GameObject obj)
+    public int hit(GameObject obj)
     {
         int layerMaskCombined = (1 << (int)Layers.Board);
         RaycastHit hit;
@@ -47,12 +47,15 @@ public class BoardHandler : MonoBehaviour
             Vector3 scl = transform.localScale;
             brd = new Vector3(brd.x / scl.x, brd.y / scl.y, brd.z / scl.z);
 
-            points.Add(calculatePoints(-brd.x, brd.y));
+            int scoredPoints = calculatePoints(-brd.x, brd.y);
+            points.Add(scoredPoints);
             Debug.Log(points.Count);
+            return scoredPoints;
         }
         else
         {
             Debug.Log("Ray did not hit board");
+            return 0;
         }
     }
 
@@ -181,6 +184,20 @@ public class BoardHandler : MonoBehaviour
             counter += points[i];
         }
         return counter;
+    }
+
+    public bool RemoveHitPoints(int score)
+    {
+        for (int index = points.Count - 1; index >= 0; index--)
+        {
+            if (points[index] == score)
+            {
+                points.RemoveAt(index);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void ResetPoints()
