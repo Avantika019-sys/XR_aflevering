@@ -4,7 +4,6 @@ using UnityEngine;
 
 public class BoardHandler : MonoBehaviour
 {
-
     public GameObject Board;
     public GameObject Line;
 
@@ -17,29 +16,28 @@ public class BoardHandler : MonoBehaviour
     public float insideRingRadius = 0.102f;
     public float tripleDouble = 0.008f;
 
+    public List<int> points = new List<int>();
 
-    public List<int> points = new List<int> ();
+    private Vector3 fixedBoardScale;
+    private bool fixedScaleInitialized = false;
 
-    // Start is called before the first frame update
     void Start()
     {
+        fixedBoardScale = Board.transform.localScale;
+        fixedScaleInitialized = true;
+
         projectTo(new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 0.0f, 1.0f));
     }
 
-    // Update is called once per frame
     void Update()
     {
-        //projectTo(new Vector3(-3.0f, -3.0f, 0.0f), new Vector3(0.7f, 0.7f, 1.0f));
     }
 
-
-
-    public void hit(GameObject obj)
+    public int hit(GameObject obj)
     {
-
         int layerMaskCombined = (1 << (int)Layers.Board);
         RaycastHit hit;
-        //if (Physics.Raycast(from, transform.TransformDirection(dir), out hit, Mathf.Infinity, layerMask))
+
         Vector3 dir = obj.transform.forward;
         Vector3 from = obj.transform.position - dir * 2.0f;
 
@@ -48,12 +46,16 @@ public class BoardHandler : MonoBehaviour
             Vector3 brd = transform.InverseTransformPoint(hit.point);
             Vector3 scl = transform.localScale;
             brd = new Vector3(brd.x / scl.x, brd.y / scl.y, brd.z / scl.z);
-            //Debug.Log($"{-brd.x}, {brd.y}");
-            points.Add(calculatePoints(-brd.x, brd.y));
+
+            int scoredPoints = calculatePoints(-brd.x, brd.y);
+            points.Add(scoredPoints);
             Debug.Log(points.Count);
-        } else
+            return scoredPoints;
+        }
+        else
         {
             Debug.Log("Ray did not hit board");
+            return 0;
         }
     }
 
@@ -68,20 +70,31 @@ public class BoardHandler : MonoBehaviour
         float phi = pos.phi;
         int[] pointsBoard = new int[] { 6, 13, 4, 18, 1, 20, 5, 12, 9, 14, 11, 8, 16, 7, 19, 3, 17, 2, 15, 10 };
         int points = pointsBoard[Mathf.FloorToInt(((phi + 9) % 360) / 18)];
-        if (r < bullsInside / 2) {
+
+        if (r < bullsInside / 2)
+        {
             points = 50;
-        } else if (bullsInside / 2 < r && r < bullsEyeDiameter / 2) {
+        }
+        else if (bullsInside / 2 < r && r < bullsEyeDiameter / 2)
+        {
             points = 25;
-        } else if (insideRingRadius - tripleDouble < r && r < insideRingRadius) {
+        }
+        else if (insideRingRadius - tripleDouble < r && r < insideRingRadius)
+        {
             points *= 3;
-        } else if (boardInsideRadius - tripleDouble < r && r < boardInsideRadius) {
+        }
+        else if (boardInsideRadius - tripleDouble < r && r < boardInsideRadius)
+        {
             points *= 2;
-        } else if (boardInsideRadius < r) {
+        }
+        else if (boardInsideRadius < r)
+        {
             points = 0;
         }
-        return points;
 
+        return points;
     }
+
     struct PolarCoordinate
     {
         public float r;
@@ -98,16 +111,19 @@ public class BoardHandler : MonoBehaviour
     {
         float r = Mathf.Sqrt(x * x + y * y);
         float phi = 0f;
+
         if (x == 0)
         {
             if (y > 0)
             {
                 phi = 90f;
-            } else
+            }
+            else
             {
                 phi = 270f;
-            } 
-        } else
+            }
+        }
+        else
         {
             phi = Mathf.Rad2Deg * Mathf.Atan(y / x);
             if (x < 0)
@@ -115,38 +131,38 @@ public class BoardHandler : MonoBehaviour
             else if (y < 0)
                 phi += 360;
         }
-        return new PolarCoordinate(r, phi);
 
+        return new PolarCoordinate(r, phi);
     }
 
     public bool projectTo(Vector3 from, Vector3 dir)
     {
-
-        int layerMaskCombined = 
-              (1 << (int)Layers.UI) 
-            | (1 << (int)Layers.Menu) 
-            | (1 << (int)Layers.Board) 
+        int layerMaskCombined =
+              (1 << (int)Layers.UI)
+            | (1 << (int)Layers.Menu)
+            | (1 << (int)Layers.Board)
             | (1 << (int)Layers.Dart)
             | (1 << (int)Layers.Gravity);
-        layerMaskCombined = ~layerMaskCombined; // invert so it does not hit player, board, and dart
+
+        layerMaskCombined = ~layerMaskCombined;
 
         RaycastHit hit;
-        //if (Physics.Raycast(from, transform.TransformDirection(dir), out hit, Mathf.Infinity, layerMask))
         if (Physics.Raycast(from, dir, out hit, 10f, layerMaskCombined))
         {
-            //Debug.DrawRay(from, transform.TransformDirection(dir) * hit.distance, Color.yellow);
-            //Debug.DrawRay(from, dir * hit.distance, Color.green);
-            //Debug.Log($"({from}, {transform.TransformDirection(dir) * hit.distance})");
-
-            //Debug.Log("Did Hit");
             Board.transform.position = hit.point;
             Board.transform.forward = hit.normal.normalized;
+
+            if (fixedScaleInitialized)
+            {
+                Board.transform.localScale = fixedBoardScale;
+            }
 
             RaycastHit lineHit;
             Vector3 horizontalBoardNormal = new Vector3(hit.normal.x, 0f, hit.normal.z);
             horizontalBoardNormal = horizontalBoardNormal.normalized;
             Vector3 downDir = new Vector3(0f, -1f, 0f);
-            if (Physics.Raycast(hit.point + playerDistance*horizontalBoardNormal, downDir, out lineHit, 10f, layerMaskCombined))
+
+            if (Physics.Raycast(hit.point + playerDistance * horizontalBoardNormal, downDir, out lineHit, 10f, layerMaskCombined))
             {
                 Line.transform.position = lineHit.point;
                 Line.transform.forward = horizontalBoardNormal;
@@ -156,28 +172,36 @@ public class BoardHandler : MonoBehaviour
         }
         else
         {
-            //Debug.DrawRay(from, transform.TransformDirection(dir) * 1000, Color.red);
-            Board.transform.position = dir * 10;
-            Board.transform.forward = -dir;
-            //Debug.Log("Did not Hit");
             return false;
         }
     }
-   
+
     public int GetPoints()
     {
         int counter = 0;
-        for(int i = 0; i<points.Count; i++)
+        for (int i = 0; i < points.Count; i++)
         {
             counter += points[i];
         }
         return counter;
+    }
 
+    public bool RemoveHitPoints(int score)
+    {
+        for (int index = points.Count - 1; index >= 0; index--)
+        {
+            if (points[index] == score)
+            {
+                points.RemoveAt(index);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void ResetPoints()
     {
         points = new List<int>();
     }
-
 }

@@ -1,3 +1,4 @@
+using Microsoft.MixedReality.Toolkit.Input;
 using Microsoft.MixedReality.Toolkit.Utilities;
 using System.Collections.Generic;
 using UnityEngine;
@@ -7,8 +8,9 @@ public static class GestureUtils
 {
     private const float PinchThresholdPlacement = 0.7f;
     private const float PinchThresholdThrowing = 0.2f;
-    private const float GrabThreshold = 0.4f;
-    private const float OpenPalmCurlThreshold = 0.4f;
+    private const float GrabThreshold = 0.28f;
+    private const float OpenFingerThreshold = 0.35f;
+    private const float ClosedFingerThreshold = 0.55f;
 
     public static bool IsPinching(Handedness trackedHand)
     {
@@ -17,26 +19,21 @@ public static class GestureUtils
 
         scene.GetRootGameObjects(rootObjects);
 
-        GameObject inputControllerObject = null;
+        GameObject InputController = null;
 
         foreach (GameObject go in rootObjects)
         {
             if (go.name == "Constants")
             {
-                inputControllerObject = go.GetComponent<ConstantsScript>().InputController;
+                InputController = go.GetComponent<ConstantsScript>().InputController;
             }
         }
 
         float currentThreshold = PinchThresholdPlacement;
-
-        if (inputControllerObject != null)
+        if (InputController.GetComponent<InputController>().mode == Modes.Dart ||
+            InputController.GetComponent<InputController>().mode == Modes.Idle)
         {
-            InputController inputController = inputControllerObject.GetComponent<InputController>();
-            if (inputController != null &&
-                (inputController.mode == Modes.Dart || inputController.mode == Modes.Idle))
-            {
-                currentThreshold = PinchThresholdThrowing;
-            }
+            currentThreshold = PinchThresholdThrowing;
         }
 
         return HandPoseUtils.CalculateIndexPinch(trackedHand) > currentThreshold;
@@ -51,14 +48,73 @@ public static class GestureUtils
                HandPoseUtils.ThumbFingerCurl(trackedHand) > GrabThreshold;
     }
 
+    public static bool IsPeaceSign(Handedness trackedHand)
+    {
+        if (HandJointUtils.FindHand(trackedHand) is null)
+            return false;
+
+        float indexCurl = HandPoseUtils.IndexFingerCurl(trackedHand);
+        float middleCurl = HandPoseUtils.MiddleFingerCurl(trackedHand);
+        float ringCurl = HandPoseUtils.RingFingerCurl(trackedHand);
+        float pinkyCurl = HandPoseUtils.PinkyFingerCurl(trackedHand);
+        float thumbCurl = HandPoseUtils.ThumbFingerCurl(trackedHand);
+
+        bool indexAndMiddleOpen =
+            indexCurl < OpenFingerThreshold &&
+            middleCurl < OpenFingerThreshold;
+
+        bool ringAndPinkyClosed =
+            ringCurl > ClosedFingerThreshold &&
+            pinkyCurl > ClosedFingerThreshold;
+
+        bool thumbRelaxed = thumbCurl < 0.85f;
+
+        return !IsPinching(trackedHand) && indexAndMiddleOpen && ringAndPinkyClosed && thumbRelaxed;
+    }
+
     public static bool IsOpenPalm(Handedness trackedHand)
     {
-        return !IsPinching(trackedHand) &&
-               !IsGrabbing(trackedHand) &&
-               HandPoseUtils.IndexFingerCurl(trackedHand) < OpenPalmCurlThreshold &&
-               HandPoseUtils.MiddleFingerCurl(trackedHand) < OpenPalmCurlThreshold &&
-               HandPoseUtils.RingFingerCurl(trackedHand) < OpenPalmCurlThreshold &&
-               HandPoseUtils.PinkyFingerCurl(trackedHand) < OpenPalmCurlThreshold &&
-               HandPoseUtils.ThumbFingerCurl(trackedHand) < OpenPalmCurlThreshold;
+        if (HandJointUtils.FindHand(trackedHand) is null)
+            return false;
+
+        float indexCurl = HandPoseUtils.IndexFingerCurl(trackedHand);
+        float middleCurl = HandPoseUtils.MiddleFingerCurl(trackedHand);
+        float ringCurl = HandPoseUtils.RingFingerCurl(trackedHand);
+        float pinkyCurl = HandPoseUtils.PinkyFingerCurl(trackedHand);
+        float thumbCurl = HandPoseUtils.ThumbFingerCurl(trackedHand);
+
+        bool fingersOpen =
+            indexCurl < 0.78f &&
+            middleCurl < 0.78f &&
+            ringCurl < 0.78f &&
+            pinkyCurl < 0.78f &&
+            thumbCurl < 0.95f;
+
+        return fingersOpen && !IsPinching(trackedHand) && !IsGrabbing(trackedHand) && !IsPeaceSign(trackedHand);
+    }
+
+    public static bool IsThumbsUp(Handedness trackedHand)
+    {
+    if (HandJointUtils.FindHand(trackedHand) is null)
+        return false;
+
+    if (!HandJointUtils.TryGetJointPose(TrackedHandJoint.ThumbTip, trackedHand, out MixedRealityPose thumb))
+        return false;
+
+    float indexCurl = HandPoseUtils.IndexFingerCurl(trackedHand);
+    float middleCurl = HandPoseUtils.MiddleFingerCurl(trackedHand);
+    float ringCurl = HandPoseUtils.RingFingerCurl(trackedHand);
+    float pinkyCurl = HandPoseUtils.PinkyFingerCurl(trackedHand);
+
+    bool fingersClosed =
+        indexCurl > 0.4f &&
+        middleCurl > 0.4f &&
+        ringCurl > 0.4f &&
+        pinkyCurl > 0.4f;
+
+    bool thumbUp =
+        Vector3.Dot(thumb.Up, Vector3.up) > 0.2f;
+
+    return fingersClosed && thumbUp;
     }
 }

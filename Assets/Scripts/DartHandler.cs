@@ -24,12 +24,12 @@ public class DartHandler : MonoBehaviour
     private Vector3 acceleration = new Vector3(0,-6, 0);
 
     private bool stopped = false;
+    private bool boardHitRegistered = false;
+    private int boardHitScore = 0;
 
-    // Start is called before the first frame update
+    
     void Start()
     {
-        // trail = Trail.GetComponent<TrailRenderer>();
-        //Debug.Log(trail);
 
         List<GameObject> rootObjects = new List<GameObject>();
         Scene scene = SceneManager.GetActiveScene();
@@ -43,14 +43,11 @@ public class DartHandler : MonoBehaviour
                 Constants = go;
             }
         }
-
-
     }
 
     public void Pause(bool pause)
     {
         stopped = pause;
-        //Debug.Log(trail);
         trail.enabled = !pause;
     }
 
@@ -60,7 +57,27 @@ public class DartHandler : MonoBehaviour
         trail.enabled = true;
     }
 
-    // Update is called once per frame
+    public bool HasRegisteredBoardHit()
+    {
+        return boardHitRegistered;
+    }
+
+    public int GetRegisteredBoardHitScore()
+    {
+        return boardHitScore;
+    }
+
+    public void ClearRegisteredBoardHit()
+    {
+        boardHitRegistered = false;
+        boardHitScore = 0;
+    }
+
+    public bool IsStopped()
+    {
+        return stopped;
+    }
+    
     void Update()
     {
         if (!stopped)
@@ -71,12 +88,9 @@ public class DartHandler : MonoBehaviour
             acc *= Constants.GetComponent<ConstantsScript>().Gravity;
             velocity += acc * Time.deltaTime;
 
-
-            // Raycast to ensure dart, does not clip through other gameobjects
             int layerMaskCombined =
                   (1 << (int)Layers.UI)
                 | (1 << (int)Layers.Menu)
-                //| (1 << (int)Layers.Board)
                 | (1 << (int)Layers.Dart)
                 | (1 << (int)Layers.Gravity);
 
@@ -88,9 +102,7 @@ public class DartHandler : MonoBehaviour
             {
                 if (hit.collider.gameObject.name != "Dartboard")
                     Debug.Log(hit.collider.gameObject.name);
-                transform.position = hit.point;
-                velocity = Vector3.zero;
-                stopped = true;
+                HandleImpact(hit.collider, hit.point, dir);
             } else
             {
                 transform.position += velocity * Time.deltaTime;
@@ -104,32 +116,48 @@ public class DartHandler : MonoBehaviour
 
     void OnTriggerEnter(Collider collision)
     {
-        if (true) // TODO: (!stopped)
+        if (stopped && boardHitRegistered)
+            return;
+
+        Debug.Log(collision.tag);
+        if (collision.tag == "Menu")
+            return;
+
+        if (collision.tag == "Gravity")
         {
-            Debug.Log(collision.tag);
-            if (collision.tag == "Menu")
-                return;
+            acceleration = collision.gameObject.GetComponent<GravityField>().getGravity();
+            return;
+        }
 
-            if (collision.tag == "Gravity")
+        Vector3 impactDir = velocity.sqrMagnitude > 0.0001f ? velocity.normalized : transform.forward;
+        HandleImpact(collision, transform.position, impactDir);
+    }
+
+    private void HandleImpact(Collider collision, Vector3 hitPoint, Vector3 hitDir)
+    {
+        transform.position = hitPoint;
+
+        bool isBoardHit = collision.CompareTag("Board");
+        BoardHandler board = collision.GetComponent<BoardHandler>();
+        if (board == null)
+            board = collision.GetComponentInParent<BoardHandler>();
+
+        if (board != null)
+            isBoardHit = true;
+
+        if (board != null)
+        {
+            transform.position += hitDir.normalized * 0.007f;
+            transform.parent = board.transform;
+
+            if (!boardHitRegistered)
             {
-                acceleration = collision.gameObject.GetComponent<GravityField>().getGravity();
-            }
-            else
-            {
-                transform.position += velocity.normalized * 0.007f;
-                velocity = Vector3.zero;
-                stopped = true;
-
-                if (collision.tag == "Board")
-                {
-                    transform.parent = collision.gameObject.transform;
-                    //transform.localPosition = Vector3.zero;
-                    //transform.localRotation = Quaternion.identity;
-                    BoardHandler board = collision.gameObject.GetComponent<BoardHandler>();
-                    board.hit(Dart);
-
-                }
+                boardHitScore = board.hit(Dart);
+                boardHitRegistered = true;
             }
         }
+
+        velocity = Vector3.zero;
+        stopped = true;
     }
 }
