@@ -1,13 +1,13 @@
 ## **AR-Dart**
-
-This repo is the source code for **AR-Dart**, a mixed reality game created for the ETH-course Mixed Reality.
-
 To run the application, you will need:
-
 - Microsoft HoloLens 2
 - Unity (2020.3 LTS and make sure to download Universal Windows Plattform and IL2CPP)
 - Microsoft Mixed Reality Toolkit
-- A Visual Studio version (2019 or higher). 
+- A Visual Studio version (2019 or higher).
+
+### **NOTE**
+This project implementation for the course SWIGX, AI-assisted tools such as GitHub Copilot was used for code suggestions and debugging support during the project development.
+
 
 ### **Setup**
 
@@ -15,20 +15,4 @@ Clone the git-repository and open the Mixed Reality Toolkit. Use the button **Re
 
 ### **The game**
 
-In the HoloLens 2, there should be an application ar-dart now. Press on the application to run the game and enjoy the different tools! 
-
-
-### **Features**
-
-The game itself is straight forward. Place the dart board, by pinching gesture, to your belonging, on the ground, on a wall, maybe even on the ceiling! By pinching gesture, a dart should spawn in your right hand, you can now throw the dart on the dartboard to score points!
-
-#### **Game modes**
-
-- We implemented a gravitational game mode with inverse gravity, left right gravity and both levels combined! Use gravity to your advantage to win the game! 
-- You can also adjust the speed and gravity in the menu, this make it more fun to play.
-
-Below you can find a link to a demo video as well as a screenshot from the game.
-
-[Link to demo video](https://polybox.ethz.ch/index.php/s/ivZ7Rxx2sWFquVf)
-
-![final_game](https://user-images.githubusercontent.com/87820315/212543088-0ed74c9a-53cf-476d-8dab-b45ed68c41e4.png)
+In the HoloLens 2, there should be an application ar-dart now.
