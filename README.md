@@ -5,8 +5,8 @@ To run the application, you will need:
 - Microsoft Mixed Reality Toolkit
 - A Visual Studio version (2019 or higher).
 
-### **NOTE**
-This project implementation for the course SWIGX, AI-assisted tools such as GitHub Copilot was used for code suggestions and debugging support during the project development.
+### **Note on Authorship**
+This project implementation for the course SWIGX, AI-assisted tools such as GitHub Copilot and ChatGPT were used for some small code formulations, code suggestions, and debugging support for this project.
 
 
 ### **Setup**
