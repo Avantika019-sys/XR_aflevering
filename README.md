@@ -1,13 +1,13 @@
 ## **AR-Dart**
+
+### **Note on Authorship**
+This project implementation for the course SWIGX, AI-assisted tools such as GitHub Copilot and ChatGPT were used for some small code formulations, code suggestions, and debugging support for this project.
+
 To run the application, you will need:
 - Microsoft HoloLens 2
 - Unity (2020.3 LTS and make sure to download Universal Windows Plattform and IL2CPP)
 - Microsoft Mixed Reality Toolkit
 - A Visual Studio version (2019 or higher).
-
-### **Note on Authorship**
-This project implementation for the course SWIGX, AI-assisted tools such as GitHub Copilot and ChatGPT were used for some small code formulations, code suggestions, and debugging support for this project.
-
 
 ### **Setup**
 
